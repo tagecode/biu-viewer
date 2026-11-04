@@ -1,0 +1,17 @@
+[package]
+name = "biuviewer-ui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "博览的 GPUI 界面"
+
+[dependencies]
+biuviewer-core.workspace = true
+biuviewer-decoder.workspace = true
+gpui-kit.workspace = true
+image.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true
