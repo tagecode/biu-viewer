@@ -64,6 +64,8 @@ Windows 与 Linux 产物的**运行**行为仍需在对应系统上验证（当�
 
 `v0.1.1` 在 `v0.1.0` 基础上仅包含一项修复：缩略图条在翻页时跟随当前图片（GPUI `ScrollHandle` 的偏移方向取反），产物内容、包结构与上述校验结论一致。三个新产物的 `shasum -a 256 -c checksums.txt` 全部通过；macOS 产物 `--version` 输出 `biuviewer 0.1.1`，`lipo -info` 显示 `x86_64 arm64`。
 
+`v0.1.2` 在此基础上修复「重置」未恢复适应窗口的问题（T12）。
+
 ## 测试素材
 
 ```bash
