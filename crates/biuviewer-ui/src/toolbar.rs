@@ -168,7 +168,7 @@ impl ViewerApp {
             .child(Self::tool_button(
                 "tb-reset",
                 "重置",
-                "重置旋转与翻转",
+                "重置旋转、翻转与缩放",
                 has_image,
                 cx,
                 |this, _window, cx| this.reset_transform(cx),

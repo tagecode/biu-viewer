@@ -534,7 +534,10 @@ impl ViewerApp {
 
     pub(crate) fn reset_transform(&mut self, cx: &mut Context<Self>) {
         self.transform.reset();
-        self.after_transform_change(cx);
+        self.rebuild_display();
+        // 重置同时恢复适应窗口（T12：重置回到 Fit 模式）。
+        self.view = Viewport::fit(self.display_extent(), self.viewport_size);
+        cx.notify();
     }
 
     fn after_transform_change(&mut self, cx: &mut Context<Self>) {
