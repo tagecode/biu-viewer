@@ -83,7 +83,7 @@ cargo run --release -p biuviewer-decoder --example decode_file -- /tmp/biu-bench
 
 ## 手动测试步骤
 
-1. 生成素材（1000 张图片、10MB 图片、4K 图片、40 帧 GIF、损坏文件、非图片文件）：
+1. 生成素材（1000 张图片、10MB 图片、4K 图片、40 帧 GIF、损坏文件、非图片文件，以及 `formats/` 7 种格式样张与 `exif/` 8 种方向样张）：
 
    ```bash
    cargo run --release -p biuviewer-decoder --example make_assets -- /tmp/biu-bench
