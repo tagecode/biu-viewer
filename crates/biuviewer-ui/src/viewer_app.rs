@@ -794,14 +794,25 @@ impl ViewerApp {
     // 缩略图
     // ------------------------------------------------------------------
 
+    /// 缩略图条的可视宽度。布局前 `ScrollHandle` 还没有尺寸，退回窗口宽度。
+    fn thumb_viewport_width(&self) -> f32 {
+        let width = f32::from(self.thumb_scroll.bounds().size.width);
+        if width > 0.0 {
+            width
+        } else {
+            self.viewport_size.width.max(1.0)
+        }
+    }
+
     fn scroll_thumbnails_to_current(&mut self) {
         let index = self.image_list.current_index();
         let item = THUMBNAIL_BOX + THUMBNAIL_GAP;
-        let viewport = self.viewport_size.width.max(1.0);
+        let viewport = self.thumb_viewport_width();
         let total = self.image_list.len() as f32 * item;
         let x = (index as f32 * item - (viewport - THUMBNAIL_BOX) / 2.0)
             .clamp(0.0, (total - viewport).max(0.0));
-        self.thumb_scroll.set_offset(point(px(x), px(0.0)));
+        // ScrollHandle 用负值表示已滚动距离，正值会在布局时被 clamp 回 0。
+        self.thumb_scroll.set_offset(point(px(-x), px(0.0)));
     }
 
     fn request_visible_thumbnails(&mut self, cx: &mut Context<Self>) {
@@ -1238,16 +1249,64 @@ impl ViewerApp {
 
     /// 当前滚动位置下需要建立元素的缩略图索引区间。
     pub(crate) fn visible_thumbnail_range(&self) -> (usize, usize) {
-        let total = self.image_list.len();
-        if total == 0 {
-            return (0, 0);
-        }
         let item = THUMBNAIL_BOX + THUMBNAIL_GAP;
-        let offset = f32::from(self.thumb_scroll.offset().x);
-        let width = self.viewport_size.width.max(1.0);
-        let first = ((offset / item).floor() as usize).saturating_sub(1);
-        let visible = (width / item).ceil() as usize + 2;
-        let last = (first + visible).min(total);
-        (first.min(last), last)
+        // 存的是负偏移，取反得到已滚动距离。
+        let offset = -f32::from(self.thumb_scroll.offset().x);
+        visible_index_range(
+            offset,
+            self.thumb_viewport_width(),
+            self.image_list.len(),
+            item,
+        )
+    }
+}
+
+/// 由已滚动距离推出需要渲染的缩略图下标区间 `[first, last)`。
+fn visible_index_range(
+    offset: f32,
+    viewport_width: f32,
+    total: usize,
+    item: f32,
+) -> (usize, usize) {
+    if total == 0 || item <= 0.0 {
+        return (0, 0);
+    }
+    let first = ((offset.max(0.0) / item).floor() as usize)
+        .saturating_sub(1)
+        .min(total);
+    let visible = (viewport_width.max(1.0) / item).ceil() as usize + 2;
+    let last = first.saturating_add(visible).min(total);
+    (first, last)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::visible_index_range;
+
+    const ITEM: f32 = 68.0;
+
+    #[test]
+    fn range_starts_at_zero_without_scrolling() {
+        assert_eq!(visible_index_range(0.0, 680.0, 1000, ITEM), (0, 12));
+    }
+
+    #[test]
+    fn range_follows_the_scroll_offset() {
+        // 滚动 680px（10 项）后，第一项应退到 9 附近，并在前后各留一格。
+        let (first, last) = visible_index_range(680.0, 680.0, 1000, ITEM);
+        assert_eq!(first, 9);
+        assert_eq!(last, 21);
+    }
+
+    #[test]
+    fn range_is_clamped_at_the_end() {
+        let (first, last) = visible_index_range(100_000.0, 680.0, 20, ITEM);
+        assert_eq!(last, 20);
+        assert_eq!(first, 20);
+    }
+
+    #[test]
+    fn negative_offset_is_treated_as_no_scroll() {
+        assert_eq!(visible_index_range(-500.0, 680.0, 1000, ITEM), (0, 12));
     }
 }
