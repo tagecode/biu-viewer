@@ -1860,63 +1860,116 @@ mod tests {
 }
 ```
 
-### 9.2 集成测试
+### 9.2 模块级联与集成测试
+
+由于采用 workspace 多 crate 架构（core → decoder / platform → ui → biuviewer），模块间的集成通过**编译期依赖链**和 **example 程序**覆盖：
 
 ```rust
-#[test]
-fn test_image_loading_flow() {
-    let app = App::new();
-    let path = PathBuf::from("tests/fixtures/test.png");
-    
-    app.open_file(path.clone());
-    
-    // 等待加载完成
-    std::thread::sleep(Duration::from_secs(1));
-    
-    let state = app.state();
-    assert_eq!(state.current_image().unwrap().path, path);
-    assert!(state.current_texture().is_some());
+// biuviewer-decoder 的 example/decode_file.rs 充当集成测试
+// 调用 decode_static → 返回 DecodedImage → 打印耗时 / 像素校验和
+use biuviewer_decoder::{decode_static, FormatDetector};
+
+fn main() {
+    let bytes = std::fs::read(&path).unwrap();
+    let format = FormatDetector::new().detect(&bytes, &path).unwrap();
+    let start = Instant::now();
+    let decoded = decode_static(&bytes).unwrap();
+    eprintln!("{:?} {} × {} 解码耗时 {:.2} ms", format, decoded.width, decoded.height, start.elapsed().as_secs_f64() * 1000.0);
+    // 验证图像非空、尺寸、像素校验和
 }
 ```
+
+工作区测试（`cargo test --workspace`）在 CI 的三个平台（macOS / Windows / Linux）上均执行，覆盖 81 个单元测试：
+- **biuviewer-core**: 36 tests（viewport 缩放/平移/fit/旋转、transform 矩阵变换、cache LRU、image_list）
+- **biuviewer-decoder**: 30 tests（格式检测、EXIF 方向、GIF 帧解析、文件夹扫描、自然排序）
+- **biuviewer-ui**: 9 tests（缩略图可视范围、错误映射）
+- **biuviewer**: 6 tests（CLI 参数、空状态标签）
 
 ### 9.3 性能测试
 
+项目使用 **Criterion** benchmark 框架，在 `crates/biuviewer-{core,decoder}/benches/` 下提供微基准：
+
 ```rust
-#[bench]
-fn bench_decode_jpeg(b: &mut Bencher) {
-    let data = std::fs::read("tests/fixtures/large.jpg").unwrap();
-    b.iter(|| {
-        let _ = image::load_from_memory(&data);
+// crates/biuviewer-core/benches/cache.rs
+use biuviewer_core::{InsertResult, MemoryCache};
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
+
+fn bench_cache_insert(c: &mut Criterion) {
+    c.bench_function("MemoryCache::insert_within_budget", |b| {
+        let mut cache = MemoryCache::new(1024 * 1024);
+        let data = vec![0u8; 1024];
+        b.iter(|| {
+            cache.insert(black_box("key"), data.clone());
+        });
     });
 }
 
-#[bench]
-fn bench_texture_upload(b: &mut Bencher) {
-    let img = RgbaImage::new(1920, 1080);
-    let context = GpuContext::new();
-    b.iter(|| {
-        let _ = context.create_texture(&img);
+criterion_group!(benches, bench_cache_insert);
+criterion_main!(benches);
+```
+
+```rust
+// crates/biuviewer-decoder/benches/decode.rs
+fn bench_decode_jpeg(c: &mut Criterion) {
+    let bytes = include_bytes!("../../../resources/test/sample.jpg");
+    c.bench_function("decode_jpeg_1920x1080", |b| {
+        b.iter(|| decode_static(black_box(bytes)).unwrap());
     });
 }
 ```
 
-### 9.4 UI 测试
+**手动性能测试**脚本（`scripts/bench-manual.sh`）补充了端到端性能采样：
+1. 生成 1000 张 400×300 PNG 测试素材（`make_assets` example）。
+2. 运行 `cargo bench -p biuviewer-core --bench cache`、`cargo bench -p biuviewer-decoder --bench decode`。
+3. 对大图（10 MB PNG / 4K JPEG / GIF 动画）单独计时解码耗时。
+4. 启动 Release 二进制打开 1000 张目录，采样 RSS 内存曲线，验证无持续增长（512 MB 预算约束下回落）。
 
-```rust
-#[test]
-fn test_keyboard_navigation() {
-    let app = App::new();
-    app.load_folder("tests/fixtures/photos");
-    
-    assert_eq!(app.state().current_index, 0);
-    
-    app.send_key(Key::Right);
-    assert_eq!(app.state().current_index, 1);
-    
-    app.send_key(Key::Left);
-    assert_eq!(app.state().current_index, 0);
-}
-```
+性能目标在文档 8.2 节定义；benchmark 结果提交到 `docs/benchmark.md`（未纳入自动化回归，CI 仅编译不跑 bench）。
+
+### 9.4 端到端验收测试
+
+MVP 验收按 `docs/Mvp.md` 第四章清单执行，结果记录在 `docs/acceptance.md`：
+
+**验收流程**：
+1. **生成素材**：`cargo run -p biuviewer-decoder --example make_assets -- /tmp/biu-bench` 产出：
+   - `1000-photos/`（翻页与内存测试）
+   - `formats/`（7 种 P0 格式各一张）
+   - `exif/`（8 种 EXIF 方向 JPEG）
+   - 根目录（大图、GIF 动画、损坏图、不支持文件）
+
+2. **三平台产物校验**：
+   - 从 GitHub Release 下载对应平台的 zip / tar.gz（macOS universal / Windows x64 / Linux x86_64）。
+   - 校验 SHA256（`checksums.txt`）。
+   - 解压后验证可执行文件架构（`lipo -info` / `file` / `PE` 检查器）和 `Info.plist` / `.desktop` 文件格式。
+
+3. **功能验收**（17 项，真机执行）：
+   - 对话框/拖拽打开（rfd 原生对话框，需人工交互）。
+   - 缩略图条浏览、点击切换、方向键翻页。
+   - 适应窗口、放大/缩小、拖拽平移、旋转/翻转/重置。
+   - 全屏进入/退出（`F` / `Esc`）。
+   - EXIF 8 方向正确显示（红左上/绿右上/蓝左下/黄右下 + 顶部黑条）。
+   - GIF 按正确帧率播放（0.4 秒截图帧内容不同）。
+   - 7 种 P0 格式（PNG/JPEG/GIF/BMP/WebP/TIFF/ICO）。
+   - 损坏/不支持/无权限文件错误提示（错误卡片/提示条，不崩溃）。
+   - 连续翻页 500 张内存不持续增长（后台采样 RSS 曲线）。
+   - Release 产物解压后按 README 可运行（`--version` 输出、启动不闪退）。
+
+4. **平台特有检查**（真机独立测试）：
+   - **macOS**: `xattr -cr` 移除隔离标签后启动；拖拽与对话框正常工作。
+   - **Windows**: SmartScreen 提示可跳过；125%/150% DPI 下布局正确；中文与含空格路径支持。
+   - **Linux**: X11 与 Wayland 各跑一轮；干净系统按 README 装依赖后可启动；`install.sh` 后应用菜单项与图标正常。
+
+**已知限制**：
+- 对话框与拖拽需人工验证（原生 API 无法可靠脚本化）。
+- 滚轮缩放与触控板手势需真实硬件（合成 `CGEvent` 不被 GPUI 接收）。
+- 帧率无法用脚本稳定采样（依赖人工观察）。
+
+**自动化覆盖**：
+- CI 在三平台编译并运行 81 个单元测试、2 个 clippy / fmt 检查、workspace 级依赖关系验证。
+- Release 工作流生成三平台产物并发布 GitHub Release，附带 checksums.txt。
+- 人工验收补充 GUI 交互与性能采样（非 CI 范围）。
+
+验收结论见 `docs/acceptance.md` 结果表；全部通过后打正式 tag（如 `v0.1.0`、`v0.1.1`、`v0.1.2`）。
 
 ---
 
