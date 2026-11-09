@@ -13,7 +13,7 @@
 | 工具链 | Rust 1.99.1 |
 | 构建 | `--release`：`opt-level = 3`、`lto = true`、`codegen-units = 1`、`strip = true` |
 
-> 表中数据来自本机一次测量，用于判断是否达到 PRD 5.2 的目标，不代表所有机器。Windows / Linux 的数据需在对应平台按同样步骤复测。
+> 表中数据来自本机一次测量，用于判断是否达到 PRD 5.2 的目标，不代表所有机器。Windows 的数据见下文「Windows 实测（v0.1.2）」；Linux 需在对应平台按同样步骤复测。
 
 ## 验收指标对照
 
@@ -61,7 +61,7 @@ cargo run --release -p biuviewer-decoder --example decode_file -- /tmp/biu-bench
 
 ## 内存
 
-采样命令（macOS 用 `ps -o rss=`，Linux 用 `ps -o rss=`，Windows 用任务管理器）：
+采样命令（macOS 用 `ps -o rss=`，Linux 用 `ps -o rss=`，Windows 用 `Get-Process -Id <pid> | % { $_.WorkingSet64 }`）：
 
 ```bash
 ./scripts/bench-manual.sh /tmp/biu-bench
@@ -80,6 +80,22 @@ cargo run --release -p biuviewer-decoder --example decode_file -- /tmp/biu-bench
 结论：内存由 512 MB 主图缓存 + 64 MB 缩略图缓存按字节淘汰约束，翻页越多越接近预算上限，但不会无限增长；回访已缓存图片时内存回落。1000 张小图（400×300）可以全部留在预算内，因此数值一路上升到接近预算；用 12MP 照片测试时，缓存可容纳的更少，常驻内存更早趋于平稳。
 
 > 若需要更激进的省内存表现，可下调 `crates/biuviewer-ui/src/viewer_app.rs` 中的 `CACHE_BUDGET`，代价是回翻时需要重新解码。
+
+## Windows 实测（v0.1.2）
+
+测试机：Intel Xeon E5-2678 v3 @ 2.50 GHz（12 核 24 线程）、32 GB 内存、Windows 10 专业版 22H2（19045）、1920×1080 @ 100% 缩放。被测对象为 Release 产物 `BiuViewer-v0.1.2-windows-x64.zip`（不是 `cargo run`），内存用 `Get-Process -Id <pid> | % { $_.WorkingSet64 }` 采样。
+
+| 指标 | 实测 | 说明 |
+| :--- | :--- | :--- |
+| 打开 1000 张目录 | 窗口就绪后首图 23 ms | 进程启动到窗口约 1 s |
+| 单图冷启动 | 进程启动到首图可见 1014 ms | 其中 `large-10mb.png` 就绪后到可见 18 ms |
+| 翻页响应（相邻 400×300 PNG） | 33–50 ms（多次采样） | 屏幕内容变化判定，含按键投递、合成与呈现 |
+| 切换到 10 MB 大图 | 150 ms | 翻页触发解码 |
+| 空闲内存（1000 张目录） | 42.0 MB | 启动后空闲 11 s，变化 < 1 MB |
+| 空闲内存（未打开文件） | 35.8 MB | |
+| 连续翻页 1000 张 | WorkingSet 恒为 42.0 MB | 回访第 500 张时画面像素与首次一致 |
+
+> Windows 的工作集不包含 GPU 显存，图片纹理由 GPU 侧持有，因此翻页时进程工作集几乎不变；macOS 的 RSS 包含这部分内存，两平台数字不可直接比较。上表应用层耗时按“屏幕内容发生变化”判定，包含合成与呈现，与 macOS 的解码微基准也不是同一口径。
 
 ## 手动测试步骤
 
