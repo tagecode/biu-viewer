@@ -100,7 +100,9 @@ jobs:
   build-linux:
     name: Linux x86_64
     needs: verify
-    runs-on: ubuntu-latest
+    # 固定在 Ubuntu 22.04 构建：ubuntu-latest 已漂移到 26.04（glibc 2.43），
+    # 会让产物把 glibc 下限抬到 2.43，Ubuntu 22.04/24.04 都无法启动。
+    runs-on: ubuntu-22.04
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -122,6 +124,17 @@ jobs:
 
       - name: Build
         run: cargo build --release --target x86_64-unknown-linux-gnu
+
+      - name: Check GLIBC floor and run --version
+        run: |
+          BIN=target/x86_64-unknown-linux-gnu/release/biuviewer
+          MAX=$(readelf -V "$BIN" | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -uV | tail -1)
+          echo "产物最高 glibc 需求: ${MAX}（目标上限 2.35）"
+          if dpkg --compare-versions "$MAX" gt 2.35; then
+            echo "::error::产物依赖 glibc ${MAX}，超过 Ubuntu 22.04 的 2.35；请检查构建环境"
+            exit 1
+          fi
+          "$BIN" --version
 
       - name: Bundle tar.gz
         run: ./scripts/bundle-linux.sh

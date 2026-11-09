@@ -29,7 +29,7 @@
 | 14 | 损坏/不支持/无权限有提示且不崩溃 | ✅ | ✅ | ☐ | 三种错误分别显示错误卡片 / 提示条；Windows v0.1.2：截断 PNG 与拒绝访问文件显示错误卡片，`.txt` 启动或拖入显示提示条，均不崩溃 |
 | 15 | 连续翻页 500 张内存不持续增长 | ✅ | ✅ | ☐ | 见 `benchmark.md`：受 512 MB 预算约束，回翻时回落；Windows v0.1.2：翻 1000 张 WorkingSet 恒定 42 MB（纹理由 GPU 持有，不计入工作集），回访第 500 张画面像素一致 |
 | 16 | 性能指标达标 | ✅ | ✅ | ☐ | 见 `benchmark.md`；帧率待人工。Windows v0.1.2：首图 23 ms（窗口就绪后）、翻页 33–50 ms、10 MB 冷开 18 ms、大图切换 150 ms、空闲 42 MB |
-| 17 | 产物下载后按 README 可运行 | ✅ | ✅ | ☐ | 解压 Release 中的 `BiuViewer-v0.1.0-macOS-universal.zip` 后 `BiuViewer.app/Contents/MacOS/BiuViewer --version` 输出 `biuviewer 0.1.0`；Windows v0.1.2：zip SHA256 与 `checksums.txt` 一致，`--version` 输出 `biuviewer 0.1.2`，GUI 子系统无控制台 |
+| 17 | 产物下载后按 README 可运行 | ✅ | ✅ | ❌ | 解压 Release 中的 `BiuViewer-v0.1.0-macOS-universal.zip` 后 `BiuViewer.app/Contents/MacOS/BiuViewer --version` 输出 `biuviewer 0.1.0`；Windows v0.1.2：zip SHA256 与 `checksums.txt` 一致，`--version` 输出 `biuviewer 0.1.2`，GUI 子系统无控制台；Linux v0.1.2：tar.gz SHA256 与 `checksums.txt` 一致，但 `--version` 因缺少 `GLIBC_2.43` 启动失败（见「Linux 冒烟」） |
 
 图例：✅ 通过 / ❌ 不通过 / ☐ 未执行。
 
@@ -42,6 +42,22 @@
 | 无权限 | `chmod 000` 的 PNG | 错误卡片「没有权限访问：Permission denied (os error 13)」，缩略图显示 `!` |
 
 Windows `v0.1.2` 上同样三种场景：截断 PNG 与 `icacls` 拒绝访问的文件显示错误卡片，`notes.txt` 启动或拖入时显示提示条，工具栏按预期置灰；本轮自动化按像素判定卡片与提示条的存在，未逐字核对提示文案。
+
+## Linux 冒烟（v0.1.2，2026-11-09）
+
+在 WSL2 Ubuntu 22.04（glibc 2.35，x86_64）上按 README 流程对 Release 产物做冒烟，第 17 项即失败。
+
+- **完整性**：`BiuViewer-v0.1.2-linux-x86_64.tar.gz` 的 SHA256 `b98d6b19fec321d9c24666c6cfcad0b5fa45326a963af9bc29dc9bd7b665d8e2` 与 `checksums.txt` 一致；包结构、`bin/biuviewer` 的 755 权限、图标与 `.desktop` 均正常。
+- **失败现象**：安装 README 列出的依赖后，`bin/biuviewer --version` 在动态链接阶段退出：
+
+  ```
+  libm.so.6: version `GLIBC_2.43' not found (required by .../bin/biuviewer)
+  libc.so.6: weak version `GLIBC_2.39' not found
+  ```
+
+  硬依赖来自基础数学函数 `acosf` / `asinf` / `coshf` / `sinhf` / `acoshf` / `atan2f@GLIBC_2.43`。`libxkbcommon-x11.so.0` 也缺失，但它在 tarball README 的依赖列表里，安装后仍被 glibc 挡住。
+- **根因**：`release.yml` 的 Linux 构建使用 `runs-on: ubuntu-latest`。v0.1.2 构建日志显示运行器镜像为 `ubuntu26/20261101.186`（Ubuntu 26.04，glibc 2.43），产物因此把 glibc 下限抬到 2.43；而文档承诺的是 glibc 2.31+。Ubuntu 22.04（2.35）、24.04（2.39）、Fedora 43（2.42）都无法启动。GUI 未执行——加载器在进入 `main` 前就退出。
+- **修复**：`build-linux` 固定为 `ubuntu-22.04`，并新增发布前检查：产物最高 glibc 需求不得高于 2.35，否则构建失败，同时在该环境执行 `--version`；`docs/INSTALL.md` 的要求同步改为 glibc 2.35+。修复需重新发版后复测，本表 Linux 列除第 17 项外仍为待测。
 
 ## 未覆盖项与原因
 
@@ -67,7 +83,7 @@ Linux 产物的**运行**行为仍需在对应系统上验证；Windows 已在 `
 
 `v0.1.1` 在 `v0.1.0` 基础上仅包含一项修复：缩略图条在翻页时跟随当前图片（GPUI `ScrollHandle` 的偏移方向取反），产物内容、包结构与上述校验结论一致。三个新产物的 `shasum -a 256 -c checksums.txt` 全部通过；macOS 产物 `--version` 输出 `biuviewer 0.1.1`，`lipo -info` 显示 `x86_64 arm64`。
 
-`v0.1.2` 在此基础上修复「重置」未恢复适应窗口的问题（T12）。Windows 产物 `BiuViewer-v0.1.2-windows-x64.zip` 的 SHA256 为 `c33f9994b889d3620072c30bee0b5c3909d2955baa201e33d5234f866b1b9460`，与 `checksums.txt` 一致；解压后的 `biuviewer.exe` 为 PE32+ GUI 子系统（启动不弹控制台），SHA256 `a309ffffbc5c5428d68ae5dc0093a9d4eefc809c198d2c9422671e1a21fccc4a`，`--version` 输出 `biuviewer 0.1.2`。
+`v0.1.2` 在此基础上修复「重置」未恢复适应窗口的问题（T12）。Windows 产物 `BiuViewer-v0.1.2-windows-x64.zip` 的 SHA256 为 `c33f9994b889d3620072c30bee0b5c3909d2955baa201e33d5234f866b1b9460`，与 `checksums.txt` 一致；解压后的 `biuviewer.exe` 为 PE32+ GUI 子系统（启动不弹控制台），SHA256 `a309ffffbc5c5428d68ae5dc0093a9d4eefc809c198d2c9422671e1a21fccc4a`，`--version` 输出 `biuviewer 0.1.2`。Linux 产物 `BiuViewer-v0.1.2-linux-x86_64.tar.gz` 的 SHA256 为 `b98d6b19fec321d9c24666c6cfcad0b5fa45326a963af9bc29dc9bd7b665d8e2`，与 `checksums.txt` 一致，但该产物因 glibc 依赖问题无法在目标发行版上运行，见「Linux 冒烟」。
 
 ## 测试素材
 
@@ -105,4 +121,4 @@ Windows 自动化复测使用了一份按相同构造生成的等价样张（颜
 
 macOS 上已验证主流程（打开 → 缩略图 → 翻页 → 缩放/平移/旋转/全屏 → GIF → 7 种格式 → EXIF 8 方向 → 错误提示 → 内存）与打包产物可运行，17 项中 15 项通过；剩余 2 项（对话框、拖拽）是需要人工交互的操作，未在自动化流程中覆盖。
 
-Windows 在 `v0.1.2` 的 Release 产物上 17 项全部通过（帧率一项与 macOS 相同，仍需人工感受）。除缩略图条与翻页由 v0.1.1 先行验证外，其余项目均由自动化脚本复核：对话框经 UI Automation、拖拽经原生 OLE、格式/EXIF/GIF/错误提示/内存与性能经截图像素与进程采样判定；平台特有检查（SmartScreen、125%/150% 缩放、中文与空格路径）沿用 v0.1.1 的结论。Linux 全项待测。
+Windows 在 `v0.1.2` 的 Release 产物上 17 项全部通过（帧率一项与 macOS 相同，仍需人工感受）。除缩略图条与翻页由 v0.1.1 先行验证外，其余项目均由自动化脚本复核：对话框经 UI Automation、拖拽经原生 OLE、格式/EXIF/GIF/错误提示/内存与性能经截图像素与进程采样判定；平台特有检查（SmartScreen、125%/150% 缩放、中文与空格路径）沿用 v0.1.1 的结论。Linux 于 2026-11-09 完成首次冒烟：v0.1.2 产物因硬依赖 `GLIBC_2.43` 在 Ubuntu 22.04 上无法启动（根因与修复见「Linux 冒烟」），其余 16 项待修复后的新产物发布再测；在完成之前，MVP 的「三平台验收」条件不成立。

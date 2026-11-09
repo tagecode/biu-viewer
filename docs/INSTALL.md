@@ -34,7 +34,7 @@ BiuViewer 当前未做代码签名与公证，三个平台的系统都会在首�
 
 ## Linux
 
-**要求**：x86_64 架构，glibc 2.31+。需要系统具备 Vulkan 或 OpenGL 驱动与中文字体。
+**要求**：x86_64 架构，glibc 2.35+（Ubuntu 22.04 / Debian 12 / Fedora 36 起）。需要系统具备 Vulkan 或 OpenGL 驱动与中文字体。
 
 ```bash
 tar -xzf BiuViewer-vX.Y.Z-linux-x86_64.tar.gz
