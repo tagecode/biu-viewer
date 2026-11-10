@@ -29,7 +29,7 @@
 | 14 | 损坏/不支持/无权限有提示且不崩溃 | ✅ | ✅ | ☐ | 三种错误分别显示错误卡片 / 提示条；Windows v0.1.2：截断 PNG 与拒绝访问文件显示错误卡片，`.txt` 启动或拖入显示提示条，均不崩溃 |
 | 15 | 连续翻页 500 张内存不持续增长 | ✅ | ✅ | ☐ | 见 `benchmark.md`：受 512 MB 预算约束，回翻时回落；Windows v0.1.2：翻 1000 张 WorkingSet 恒定 42 MB（纹理由 GPU 持有，不计入工作集），回访第 500 张画面像素一致 |
 | 16 | 性能指标达标 | ✅ | ✅ | ☐ | 见 `benchmark.md`；帧率待人工。Windows v0.1.2：首图 23 ms（窗口就绪后）、翻页 33–50 ms、10 MB 冷开 18 ms、大图切换 150 ms、空闲 42 MB |
-| 17 | 产物下载后按 README 可运行 | ✅ | ✅ | ❌ | 解压 Release 中的 `BiuViewer-v0.1.0-macOS-universal.zip` 后 `BiuViewer.app/Contents/MacOS/BiuViewer --version` 输出 `biuviewer 0.1.0`；Windows v0.1.2：zip SHA256 与 `checksums.txt` 一致，`--version` 输出 `biuviewer 0.1.2`，GUI 子系统无控制台；Linux v0.1.2：tar.gz SHA256 与 `checksums.txt` 一致，但 `--version` 因缺少 `GLIBC_2.43` 启动失败（见「Linux 冒烟」） |
+| 17 | 产物下载后按 README 可运行 | ✅ | ✅ | ✅ | 解压 Release 中的 `BiuViewer-v0.1.0-macOS-universal.zip` 后 `BiuViewer.app/Contents/MacOS/BiuViewer --version` 输出 `biuviewer 0.1.0`；Windows v0.1.2：zip SHA256 与 `checksums.txt` 一致，`--version` 输出 `biuviewer 0.1.2`，GUI 子系统无控制台；Linux v0.1.2 因缺少 `GLIBC_2.43` 启动失败（见「Linux 冒烟」），v0.1.3 复测通过：tar.gz SHA256 一致，Ubuntu 22.04 上 `--version` 输出 `biuviewer 0.1.3`，WSLg 下 GUI 持续运行 45 s（见「Linux 复测」） |
 
 图例：✅ 通过 / ❌ 不通过 / ☐ 未执行。
 
@@ -57,7 +57,17 @@ Windows `v0.1.2` 上同样三种场景：截断 PNG 与 `icacls` 拒绝访问的
 
   硬依赖来自基础数学函数 `acosf` / `asinf` / `coshf` / `sinhf` / `acoshf` / `atan2f@GLIBC_2.43`。`libxkbcommon-x11.so.0` 也缺失，但它在 tarball README 的依赖列表里，安装后仍被 glibc 挡住。
 - **根因**：`release.yml` 的 Linux 构建使用 `runs-on: ubuntu-latest`。v0.1.2 构建日志显示运行器镜像为 `ubuntu26/20261101.186`（Ubuntu 26.04，glibc 2.43），产物因此把 glibc 下限抬到 2.43；而文档承诺的是 glibc 2.31+。Ubuntu 22.04（2.35）、24.04（2.39）、Fedora 43（2.42）都无法启动。GUI 未执行——加载器在进入 `main` 前就退出。
-- **修复**：`build-linux` 固定为 `ubuntu-22.04`，并新增发布前检查：产物最高 glibc 需求不得高于 2.35，否则构建失败，同时在该环境执行 `--version`；`docs/INSTALL.md` 的要求同步改为 glibc 2.35+。修复需重新发版后复测，本表 Linux 列除第 17 项外仍为待测。
+- **修复**：`build-linux` 固定为 `ubuntu-22.04`，并新增发布前检查：产物最高 glibc 需求不得高于 2.35，否则构建失败，同时在该环境执行 `--version`；`docs/INSTALL.md` 的要求同步改为 glibc 2.35+。修复后已重新发版并复测，见下一节；本表 Linux 列其余 16 项仍为待测。
+
+## Linux 复测（v0.1.3，2026-11-10）
+
+在同一 WSL2 Ubuntu 22.04（glibc 2.35）环境复测修复后的 Release 产物。
+
+- **完整性**：`BiuViewer-v0.1.3-linux-x86_64.tar.gz` 的 SHA256 `ba84b12874dbb066a0191db964c2acc015e43f46b2e3db83a3323ad5da9b8bf8` 与 `checksums.txt` 一致。
+- **glibc 下限**：`readelf -V` 统计的最高版本需求为 `GLIBC_2.35`（不再出现 2.43）；按 README 安装 `libxkbcommon-x11-0`、`libvulkan1` 后 `ldd` 无缺失项；`bin/biuviewer --version` 输出 `biuviewer 0.1.3`。
+- **GUI（WSLg，Wayland）**：启动日志显示 wgpu 枚举到 `D3D12 (AMD Radeon RX 580 2048SP)`（GL）与 `llvmpipe`（Vulkan）两个适配器，选中前者并创建窗口；加载 `uhd-4k.png` 后进程持续运行 45 s，仅因 `timeout` 结束，无崩溃或错误输出。窗口未取得像素级截图——Windows 会话处于锁屏。
+- **GUI（Xvfb，X11）**：在 `Xvfb :99` 下创建了标题为 `BiuViewer` 的 960×640 窗口，进程存活，适配器为 `llvmpipe`（Vulkan）；`scrot` 截取根窗口为全黑（无合成器、窗口为 32 位 ARGB），因此该截图不作为渲染通过的证据。
+- **边界**：第 17 项在 Linux 上通过（产物完整、按 README 可启动）。WSLg 的 GPU 经 D3D12 转译且系统无中文字体，不能替代真实 Linux 桌面；第 1–16 项（对话框/拖拽、格式、EXIF、GIF、内存、性能、X11 与 Wayland 差异）仍需实机执行。
 
 ## 未覆盖项与原因
 
@@ -79,11 +89,13 @@ Windows `v0.1.2` 上同样三种场景：截断 PNG 与 `icacls` 拒绝访问的
 | `BiuViewer-v0.1.0-windows-x64.zip` | 通过 | `PE32+ executable (GUI) x86-64`，含 `biuviewer.exe`、`icon.ico`、`README.txt`；GUI 子系统表示不会弹控制台 |
 | `BiuViewer-v0.1.0-linux-x86_64.tar.gz` | 通过 | `ELF 64-bit LSB pie executable, x86-64, stripped`；含 `bin/biuviewer`（保留执行位）、`install.sh`、`.desktop`、图标、README |
 
-Linux 产物的**运行**行为仍需在对应系统上验证；Windows 已在 `v0.1.2` 上完成运行验收（见上文结果表）。
+Linux 产物已在 `v0.1.3` 上完成冒烟（见「Linux 复测」），完整验收仍待实机；Windows 已在 `v0.1.2` 上完成运行验收（见上文结果表）。
 
 `v0.1.1` 在 `v0.1.0` 基础上仅包含一项修复：缩略图条在翻页时跟随当前图片（GPUI `ScrollHandle` 的偏移方向取反），产物内容、包结构与上述校验结论一致。三个新产物的 `shasum -a 256 -c checksums.txt` 全部通过；macOS 产物 `--version` 输出 `biuviewer 0.1.1`，`lipo -info` 显示 `x86_64 arm64`。
 
 `v0.1.2` 在此基础上修复「重置」未恢复适应窗口的问题（T12）。Windows 产物 `BiuViewer-v0.1.2-windows-x64.zip` 的 SHA256 为 `c33f9994b889d3620072c30bee0b5c3909d2955baa201e33d5234f866b1b9460`，与 `checksums.txt` 一致；解压后的 `biuviewer.exe` 为 PE32+ GUI 子系统（启动不弹控制台），SHA256 `a309ffffbc5c5428d68ae5dc0093a9d4eefc809c198d2c9422671e1a21fccc4a`，`--version` 输出 `biuviewer 0.1.2`。Linux 产物 `BiuViewer-v0.1.2-linux-x86_64.tar.gz` 的 SHA256 为 `b98d6b19fec321d9c24666c6cfcad0b5fa45326a963af9bc29dc9bd7b665d8e2`，与 `checksums.txt` 一致，但该产物因 glibc 依赖问题无法在目标发行版上运行，见「Linux 冒烟」。
+
+`v0.1.3` 修复 Linux 构建环境：`build-linux` 固定为 Ubuntu 22.04，并新增发布前 glibc 下限检查与 `--version` 冒烟。Linux 产物 `BiuViewer-v0.1.3-linux-x86_64.tar.gz` 的 SHA256 为 `ba84b12874dbb066a0191db964c2acc015e43f46b2e3db83a3323ad5da9b8bf8`，与 `checksums.txt` 一致；`readelf -V` 显示最高需求 `GLIBC_2.35`，在 Ubuntu 22.04 上 `--version` 输出 `biuviewer 0.1.3`（详见「Linux 复测」）。
 
 ## 测试素材
 
@@ -106,7 +118,7 @@ Windows 自动化复测使用了一份按相同构造生成的等价样张（颜
 
 ## Windows / Linux 复测步骤
 
-1. 从 `https://github.com/tagecode/biu-viewer/releases/tag/v0.1.2` 下载对应产物（`checksums.txt` 可校验完整性）。
+1. 从 `https://github.com/tagecode/biu-viewer/releases/tag/v0.1.3` 下载对应产物（`checksums.txt` 可校验完整性）。
 2. 按 `docs/INSTALL.md` 安装并首次启动。
 3. 准备素材：在有 Rust 工具链的机器上执行 `make_assets`，把产出的整个目录拷过去；或把 macOS 上已生成的 `/tmp/biu-bench` 直接复制。`formats/`、`exif/` 两个子目录用于第 11、13 项。
 4. 逐项执行上表 ☐ 项，把结果补进本节对应的列。
@@ -121,4 +133,4 @@ Windows 自动化复测使用了一份按相同构造生成的等价样张（颜
 
 macOS 上已验证主流程（打开 → 缩略图 → 翻页 → 缩放/平移/旋转/全屏 → GIF → 7 种格式 → EXIF 8 方向 → 错误提示 → 内存）与打包产物可运行，17 项中 15 项通过；剩余 2 项（对话框、拖拽）是需要人工交互的操作，未在自动化流程中覆盖。
 
-Windows 在 `v0.1.2` 的 Release 产物上 17 项全部通过（帧率一项与 macOS 相同，仍需人工感受）。除缩略图条与翻页由 v0.1.1 先行验证外，其余项目均由自动化脚本复核：对话框经 UI Automation、拖拽经原生 OLE、格式/EXIF/GIF/错误提示/内存与性能经截图像素与进程采样判定；平台特有检查（SmartScreen、125%/150% 缩放、中文与空格路径）沿用 v0.1.1 的结论。Linux 于 2026-11-09 完成首次冒烟：v0.1.2 产物因硬依赖 `GLIBC_2.43` 在 Ubuntu 22.04 上无法启动（根因与修复见「Linux 冒烟」），其余 16 项待修复后的新产物发布再测；在完成之前，MVP 的「三平台验收」条件不成立。
+Windows 在 `v0.1.2` 的 Release 产物上 17 项全部通过（帧率一项与 macOS 相同，仍需人工感受）。除缩略图条与翻页由 v0.1.1 先行验证外，其余项目均由自动化脚本复核：对话框经 UI Automation、拖拽经原生 OLE、格式/EXIF/GIF/错误提示/内存与性能经截图像素与进程采样判定；平台特有检查（SmartScreen、125%/150% 缩放、中文与空格路径）沿用 v0.1.1 的结论。Linux 于 2026-11-09 首次冒烟失败：v0.1.2 产物硬依赖 `GLIBC_2.43`，在 Ubuntu 22.04 上无法启动（根因与修复见「Linux 冒烟」）；修复构建环境后，v0.1.3 于 2026-11-10 复测通过第 17 项——Ubuntu 22.04 上产物完整、`--version` 正常、WSLg 下 GUI 启动并稳定运行。Linux 其余 16 项仍需在真实桌面（X11 与 Wayland 各一轮）执行，MVP 的「三平台验收」条件尚未完全成立。
