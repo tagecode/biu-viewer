@@ -44,7 +44,7 @@ Exec=${APP_NAME} %f
 Icon=${APP_NAME}
 Terminal=false
 Categories=Graphics;Viewer;
-MimeType=image/png;image/jpeg;image/gif;image/bmp;image/webp;image/tiff;image/x-icon;
+MimeType=image/png;image/jpeg;image/gif;image/bmp;image/webp;image/tiff;image/x-icon;image/heic;image/heif;image/avif;
 StartupNotify=true
 EOF
 

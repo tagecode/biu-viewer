@@ -45,13 +45,21 @@ Home / End 首张 / 末张
 0          适应窗口
 R / ⇧R     顺时针 / 逆时针旋转
 H / V      水平 / 垂直翻转
-F          全屏
+F / F11    全屏
+Esc        退出全屏
+空格       GIF 播放 / 暂停
+, / .      GIF 上一帧 / 下一帧
 Ctrl+O     打开图片
 Ctrl+⇧+O   打开文件夹
 
 支持格式
 --------
-PNG、JPEG、GIF、BMP、WebP、TIFF、ICO
+PNG、JPEG、GIF、BMP、WebP、TIFF、ICO、HEIC/HEIF、AVIF
+
+配置
+----
+配置文件：%APPDATA%\BiuViewer\config.txt
+自动保存窗口位置与大小、适应/1:1 缩放模式、缩略图开关。
 EOF
 
 mkdir -p "${BUNDLE_DIR}"

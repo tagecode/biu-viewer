@@ -69,6 +69,9 @@ cat > "${APP_DIR}/Contents/Info.plist" <<EOF
             <key>LSItemContentTypes</key>
             <array>
                 <string>public.image</string>
+                <string>public.heic</string>
+                <string>public.heif</string>
+                <string>public.avif</string>
                 <string>public.png</string>
                 <string>public.jpeg</string>
                 <string>com.compuserve.gif</string>
