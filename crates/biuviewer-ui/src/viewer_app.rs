@@ -76,6 +76,10 @@ pub struct ViewerApp {
     error: Option<ViewerError>,
     error_path: Option<PathBuf>,
     banner: Option<String>,
+    /// 明确选择了一个没有可显示图片的文件夹时，才显示的空状态。
+    empty_folder: Option<PathBuf>,
+    /// 首帧渲染前的自动打开不算“用户选择”，空文件夹不弹提示。
+    starting_up: bool,
     request_seq: u64,
     load_task: Option<Task<()>>,
     load_timer: Option<Task<()>>,
@@ -133,6 +137,8 @@ impl ViewerApp {
             error: None,
             error_path: None,
             banner: None,
+            empty_folder: None,
+            starting_up: true,
             request_seq: 0,
             load_task: None,
             load_timer: None,
@@ -200,7 +206,10 @@ impl ViewerApp {
         if paths.is_empty() {
             self.image_list = ImageList::empty();
             self.clear_image();
-            self.banner = Some("该文件夹中没有可显示的图片".to_string());
+            self.banner = None;
+            // 启动时由命令行/系统交给我们的路径不算用户选择：直接回到欢迎页，
+            // 避免一开窗就出现“该文件夹中没有可显示的图片”。
+            self.empty_folder = empty_folder_notice(self.starting_up, path);
             self.error = None;
             self.error_path = None;
             cx.notify();
@@ -209,6 +218,7 @@ impl ViewerApp {
 
         self.image_list = ImageList::new(paths, index);
         self.banner = None;
+        self.empty_folder = None;
         self.open_current(cx);
     }
 
@@ -1205,12 +1215,13 @@ impl ViewerApp {
             root = root.child(self.render_banner(message, cx));
         }
         root = root.child(self.render_image_area(window, cx));
-        if self.thumbnails_shown() {
+        if self.thumbnails_shown() && !self.image_list.is_empty() {
             root = root.child(self.render_thumbnail_strip(cx));
         }
         if !self.fullscreen {
             root = root.child(self.render_status_bar());
         }
+        self.starting_up = false;
         root.into_any_element()
     }
 
@@ -1316,6 +1327,10 @@ impl ViewerApp {
         }
         if let Some(error) = &self.error {
             area = area.child(self.render_error_card(error));
+        } else if let Some(folder) = &self.empty_folder {
+            let folder = folder.display().to_string();
+            area = area
+                .child(self.centered_notice("该文件夹中没有可显示的图片", Some(folder.as_str())));
         } else if self.image_list.is_empty() && self.banner.is_none() {
             area = area.child(
                 self.centered_notice(crate::EMPTY_STATE_LABEL, Some("可以将图片或文件夹拖入窗口")),
@@ -1342,7 +1357,7 @@ impl ViewerApp {
         area.into_any_element()
     }
 
-    fn centered_notice(&self, title: &'static str, detail: Option<&'static str>) -> AnyElement {
+    fn centered_notice(&self, title: &'static str, detail: Option<&str>) -> AnyElement {
         let mut card = div()
             .absolute()
             .top(px(0.0))
@@ -1360,7 +1375,12 @@ impl ViewerApp {
                     .child(title),
             );
         if let Some(detail) = detail {
-            card = card.child(div().mt(px(8.0)).text_size(px(13.0)).child(detail));
+            card = card.child(
+                div()
+                    .mt(px(8.0))
+                    .text_size(px(13.0))
+                    .child(detail.to_string()),
+            );
         }
         card.into_any_element()
     }
@@ -1569,6 +1589,15 @@ fn thumbnail_slot_weight_for_bytes(bytes: u64) -> usize {
     }
 }
 
+/// 首帧之前由命令行/系统传入的空文件夹只是启动上下文，不算用户选择。
+fn empty_folder_notice(starting_up: bool, path: PathBuf) -> Option<PathBuf> {
+    if starting_up {
+        None
+    } else {
+        Some(path)
+    }
+}
+
 /// 逐帧步进时把下标夹在有效范围内，不绕回另一端。
 fn stepped_frame_index(current: usize, frames: usize, delta: isize) -> usize {
     let frames = frames.max(1);
@@ -1578,9 +1607,22 @@ fn stepped_frame_index(current: usize, frames: usize, delta: isize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{stepped_frame_index, thumbnail_slot_weight_for_bytes, visible_index_range};
+    use super::{
+        empty_folder_notice, stepped_frame_index, thumbnail_slot_weight_for_bytes,
+        visible_index_range,
+    };
+    use std::path::PathBuf;
 
     const ITEM: f32 = 68.0;
+
+    #[test]
+    fn startup_empty_folder_is_not_a_notice() {
+        assert_eq!(empty_folder_notice(true, PathBuf::from("empty")), None);
+        assert_eq!(
+            empty_folder_notice(false, PathBuf::from("empty")),
+            Some(PathBuf::from("empty"))
+        );
+    }
 
     #[test]
     fn thumbnail_slots_grow_with_file_size() {
