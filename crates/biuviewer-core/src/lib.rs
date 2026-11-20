@@ -16,6 +16,6 @@ pub use cancel::CancellationToken;
 pub use error::ViewerError;
 pub use image_list::ImageList;
 pub use log::init_logging;
-pub use platform_service::{FileDialogService, NoopFileDialog};
+pub use platform_service::{FileDialogFuture, FileDialogService, NoopFileDialog};
 pub use transform::TransformState;
 pub use viewport::{fit_scale, Extent, Offset, ScaleMode, Viewport, MAX_SCALE, MIN_SCALE};

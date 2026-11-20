@@ -836,9 +836,12 @@ trait PlatformApi {
     fn clipboard_set_image(&self, data: &[u8], format: ImageFormat);
     fn clipboard_set_text(&self, text: &str);
     
-    // 文件对话框
-    fn open_file_dialog(&self, filters: &[FileFilter]) -> Option<PathBuf>;
-    fn open_folder_dialog(&self) -> Option<PathBuf>;
+    // 文件对话框。返回 future 而不是路径：原生面板不能阻塞在事件回调里，
+    // 否则会在框架持有 App 借用时重入（macOS 模态面板会开嵌套事件循环）。
+    // FileDialogFuture = Pin<Box<dyn Future<Output = Result<Option<PathBuf>, ViewerError>>>>；
+    // 不要求 Send，对话框必须在主线程创建。
+    fn open_file_dialog(&self, filters: &[FileFilter]) -> FileDialogFuture;
+    fn open_folder_dialog(&self) -> FileDialogFuture;
     
     // 系统集成
     fn reveal_in_file_manager(&self, path: &Path);

@@ -57,6 +57,9 @@ pub(crate) struct Display {
 
 pub struct ViewerApp {
     dialog: Arc<dyn FileDialogService>,
+    /// 对话框请求尚未返回。Windows/Linux 的对话框不模态，主窗口仍可交互，
+    /// 用它挡住连点/连按快捷键开出的第二个对话框。
+    pub(crate) dialog_in_flight: bool,
     image_list: ImageList,
     view: Viewport,
     transform: TransformState,
@@ -108,6 +111,7 @@ impl ViewerApp {
         let focus_handle = cx.focus_handle();
         let mut app = Self {
             dialog,
+            dialog_in_flight: false,
             image_list: ImageList::empty(),
             view: Viewport::default(),
             transform: TransformState::default(),
@@ -665,15 +669,49 @@ impl ViewerApp {
     // ------------------------------------------------------------------
 
     pub(crate) fn pick_image(&mut self, cx: &mut Context<Self>) {
-        match self.dialog.pick_image() {
-            Ok(Some(path)) => self.open_path(path, cx),
-            Ok(None) => {}
-            Err(err) => self.show_banner(err, cx),
+        if !self.begin_dialog(cx) {
+            return;
         }
+        let dialog = self.dialog.clone();
+        cx.spawn(async move |this, cx| {
+            let picked = dialog.pick_image().await;
+            let _ = this.update(cx, |this, cx| this.apply_pick(picked, cx));
+        })
+        .detach();
     }
 
     pub(crate) fn pick_folder(&mut self, cx: &mut Context<Self>) {
-        match self.dialog.pick_folder() {
+        if !self.begin_dialog(cx) {
+            return;
+        }
+        let dialog = self.dialog.clone();
+        cx.spawn(async move |this, cx| {
+            let picked = dialog.pick_folder().await;
+            let _ = this.update(cx, |this, cx| this.apply_pick(picked, cx));
+        })
+        .detach();
+    }
+
+    /// 标记「对话框已打开」，返回 false 表示已经有一个在等结果，本次触发应当忽略。
+    ///
+    /// macOS 的 sheet 是窗口模态，连点本来也点不到第二个；Windows/Linux 的对话框
+    /// 不模态，主窗口仍可交互，需要显式挡一下，否则会同时弹出多个对话框。
+    fn begin_dialog(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.dialog_in_flight {
+            return false;
+        }
+        self.dialog_in_flight = true;
+        // 让工具栏立刻进入禁用态，而不是等下一次无关重绘。
+        cx.notify();
+        true
+    }
+
+    /// 对话框是异步的：结果回来时事件回调早已返回，`App` 的可变借用已经释放，
+    /// 这里再打开图片不会与帧回调重入。
+    fn apply_pick(&mut self, picked: Result<Option<PathBuf>, ViewerError>, cx: &mut Context<Self>) {
+        self.dialog_in_flight = false;
+        cx.notify();
+        match picked {
             Ok(Some(path)) => self.open_path(path, cx),
             Ok(None) => {}
             Err(err) => self.show_banner(err, cx),

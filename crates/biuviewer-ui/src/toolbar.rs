@@ -36,6 +36,8 @@ impl ViewerApp {
         let zoom_label = format!("{zoom:.0}% · {mode_label}");
 
         let fullscreen = self.is_fullscreen();
+        // 对话框未返回前禁用「打开 / 文件夹」，与 `ViewerApp::begin_dialog` 的守卫保持一致。
+        let can_open = !self.dialog_in_flight;
 
         let mut bar = div()
             .id("toolbar")
@@ -56,7 +58,7 @@ impl ViewerApp {
                 "tb-open",
                 "打开",
                 "打开图片 (⌘O)",
-                true,
+                can_open,
                 cx,
                 |this, _window, cx| this.pick_image(cx),
             ))
@@ -64,7 +66,7 @@ impl ViewerApp {
                 "tb-folder",
                 "文件夹",
                 "打开文件夹 (⇧⌘O)",
-                true,
+                can_open,
                 cx,
                 |this, _window, cx| this.pick_folder(cx),
             ))
