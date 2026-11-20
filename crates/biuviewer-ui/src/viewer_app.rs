@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use biuviewer_core::{
-    Extent, FileDialogService, ImageList, MemoryCache, Offset, ScaleMode, TransformState,
-    ViewerError, Viewport,
+    CancellationToken, Extent, FileDialogService, ImageList, MemoryCache, Offset, ScaleMode,
+    TransformState, ViewerError, Viewport,
 };
 use biuviewer_decoder::{is_supported_path, FolderScanner};
 use gpui_kit::{
@@ -76,8 +76,10 @@ pub struct ViewerApp {
     request_seq: u64,
     load_task: Option<Task<()>>,
     load_timer: Option<Task<()>>,
+    load_cancel: Option<CancellationToken>,
     prefetch_task: Option<Task<()>>,
     prefetch_generation: u64,
+    prefetch_cancel: Option<CancellationToken>,
     animation_task: Option<Task<()>>,
     animation_generation: u64,
     frame_index: usize,
@@ -125,8 +127,10 @@ impl ViewerApp {
             request_seq: 0,
             load_task: None,
             load_timer: None,
+            load_cancel: None,
             prefetch_task: None,
             prefetch_generation: 0,
+            prefetch_cancel: None,
             animation_task: None,
             animation_generation: 0,
             frame_index: 0,
@@ -197,6 +201,8 @@ impl ViewerApp {
     }
 
     fn open_current(&mut self, cx: &mut Context<Self>) {
+        self.cancel_load();
+        self.cancel_prefetch();
         self.prefetch_generation += 1;
         self.prefetch_task = None;
 
@@ -225,6 +231,9 @@ impl ViewerApp {
     }
 
     fn start_loading(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        self.cancel_load();
+        let cancel = CancellationToken::new();
+        self.load_cancel = Some(cancel.clone());
         let seq = self.next_request();
         self.load_state = LoadState::Loading;
         self.show_loading = false;
@@ -234,7 +243,7 @@ impl ViewerApp {
         let decode_path = path.clone();
         let decode = cx
             .background_executor()
-            .spawn(async move { load_image_catching_panics(&decode_path) });
+            .spawn(async move { load_image_catching_panics(&decode_path, &cancel) });
         self.load_task = Some(cx.spawn(async move |weak, cx| {
             let result = decode.await;
             let _ = weak.update(cx, |this, cx| this.on_loaded(result, seq, cx));
@@ -256,9 +265,22 @@ impl ViewerApp {
         self.request_seq
     }
 
+    fn cancel_load(&mut self) {
+        if let Some(token) = self.load_cancel.take() {
+            token.cancel();
+        }
+    }
+
+    fn cancel_prefetch(&mut self) {
+        if let Some(token) = self.prefetch_cancel.take() {
+            token.cancel();
+        }
+    }
+
     /// 当前图就绪后预取前后各一张，结果只进缓存、不 pin；翻页命中时直接复用。
     /// 用单独的 generation 丢弃过期结果，避免快速翻页时旧预取覆盖新状态。
     fn start_prefetch(&mut self, cx: &mut Context<Self>) {
+        self.cancel_prefetch();
         self.prefetch_generation += 1;
         self.prefetch_task = None;
 
@@ -277,15 +299,24 @@ impl ViewerApp {
         }
 
         let generation = self.prefetch_generation;
+        let cancel = CancellationToken::new();
+        self.prefetch_cancel = Some(cancel.clone());
         self.prefetch_task = Some(cx.spawn(async move |weak, cx| {
             for path in candidates {
+                if cancel.is_cancelled() {
+                    break;
+                }
                 let decode_path = path.clone();
+                let decode_cancel = cancel.clone();
                 let decode = cx
                     .background_executor()
-                    .spawn(async move { load_image_catching_panics(&decode_path) });
+                    .spawn(async move { load_image_catching_panics(&decode_path, &decode_cancel) });
                 let Ok(loaded) = decode.await else {
                     continue;
                 };
+                if cancel.is_cancelled() {
+                    break;
+                }
                 let keep_going = weak.update(cx, |this, _cx| {
                     if this.prefetch_generation != generation
                         || !this.image_list.paths().contains(&path)
@@ -321,6 +352,7 @@ impl ViewerApp {
         if seq != self.request_seq {
             return;
         }
+        self.load_cancel = None;
         let Some(path) = self.image_list.current_path().map(PathBuf::from) else {
             return;
         };
@@ -337,6 +369,12 @@ impl ViewerApp {
                     self.pending_texture_drops.push(evicted.image.clone());
                 }
                 self.finish_with_loaded(path, loaded, cx);
+            }
+            Err(ViewerError::Cancelled) => {
+                // 已被更新请求取代；保持当前状态，不展示取消提示。
+                self.load_state = LoadState::Idle;
+                self.show_loading = false;
+                cx.notify();
             }
             Err(err) => {
                 tracing::warn!("加载 {} 失败: {err}", path.display());
@@ -360,6 +398,7 @@ impl ViewerApp {
         self.cache.set_pinned(Some(path));
         self.load_state = LoadState::Ready;
         self.show_loading = false;
+        self.load_cancel = None;
         self.error = None;
         self.error_path = None;
         self.loaded = Some(loaded);
@@ -371,6 +410,9 @@ impl ViewerApp {
     }
 
     fn clear_image(&mut self) {
+        self.cancel_load();
+        self.cancel_prefetch();
+        self.request_seq = self.request_seq.saturating_add(1);
         self.prefetch_generation += 1;
         self.prefetch_task = None;
         self.loaded = None;

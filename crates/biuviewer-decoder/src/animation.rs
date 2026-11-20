@@ -1,7 +1,7 @@
 use std::io::Cursor;
 use std::time::Duration;
 
-use biuviewer_core::ViewerError;
+use biuviewer_core::{CancellationToken, ViewerError};
 use image::codecs::gif::GifDecoder;
 use image::{AnimationDecoder, Delay, ImageDecoder};
 
@@ -46,14 +46,29 @@ impl DecodedAnimation {
 /// 解码 GIF 的全部帧。先校验画布尺寸，再逐帧解码并限制帧数与总字节，
 /// 避免在限额生效前把整段动画读进内存。`GifDecoder` 会把每帧合成为完整画布大小的 RGBA。
 pub fn decode_gif(bytes: &[u8]) -> Result<DecodedAnimation, ViewerError> {
-    decode_gif_with_limits(bytes, MAX_ANIMATION_FRAMES, MAX_ANIMATION_BYTES)
+    decode_gif_with_limits(bytes, MAX_ANIMATION_FRAMES, MAX_ANIMATION_BYTES, None)
+}
+
+/// 与 [`decode_gif`] 相同，但每帧开始前检查取消令牌。
+pub fn decode_gif_cancellable(
+    bytes: &[u8],
+    cancel: &CancellationToken,
+) -> Result<DecodedAnimation, ViewerError> {
+    decode_gif_with_limits(
+        bytes,
+        MAX_ANIMATION_FRAMES,
+        MAX_ANIMATION_BYTES,
+        Some(cancel),
+    )
 }
 
 fn decode_gif_with_limits(
     bytes: &[u8],
     max_frames: usize,
     max_bytes: usize,
+    cancel: Option<&CancellationToken>,
 ) -> Result<DecodedAnimation, ViewerError> {
+    check_cancel(cancel)?;
     let decoder = GifDecoder::new(Cursor::new(bytes)).map_err(map_image_error)?;
     let (width, height) = decoder.dimensions();
     reject_oversized(width, height)?;
@@ -75,6 +90,7 @@ fn decode_gif_with_limits(
     let mut decoded = Vec::new();
     let mut total_bytes = 0usize;
     for (index, frame) in decoder.into_frames().enumerate() {
+        check_cancel(cancel)?;
         if index >= frame_limit {
             return Err(ViewerError::Unsupported(format!(
                 "GIF 帧数或总大小超出上限（最多 {frame_limit} 帧）"
@@ -107,6 +123,14 @@ fn decode_gif_with_limits(
         height,
         frames: decoded,
     })
+}
+
+fn check_cancel(cancel: Option<&CancellationToken>) -> Result<(), ViewerError> {
+    if cancel.is_some_and(CancellationToken::is_cancelled) {
+        Err(ViewerError::Cancelled)
+    } else {
+        Ok(())
+    }
 }
 
 /// 只解码 GIF 的第一帧，供缩略图使用，避免为了一个 128px 缩略图解完整段动画。
@@ -212,13 +236,22 @@ mod tests {
     }
 
     #[test]
+    fn cancelled_decode_stops_before_reading_frames() {
+        let gif = encode_gif(&[(solid(2, 2, [7, 8, 9, 255]), 100)]);
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let err = decode_gif_cancellable(&gif, &cancel).unwrap_err();
+        assert!(matches!(err, ViewerError::Cancelled));
+    }
+
+    #[test]
     fn frame_count_limit_is_enforced() {
         let gif = encode_gif(&[
             (solid(2, 2, [1, 0, 0, 255]), 100),
             (solid(2, 2, [2, 0, 0, 255]), 100),
             (solid(2, 2, [3, 0, 0, 255]), 100),
         ]);
-        let err = decode_gif_with_limits(&gif, 2, MAX_ANIMATION_BYTES).unwrap_err();
+        let err = decode_gif_with_limits(&gif, 2, MAX_ANIMATION_BYTES, None).unwrap_err();
         assert!(
             matches!(err, ViewerError::Unsupported(_)),
             "expected Unsupported, got {err:?}"
@@ -229,7 +262,7 @@ mod tests {
     fn byte_limit_is_enforced_before_decoding_frames() {
         let gif = encode_gif(&[(solid(2, 2, [1, 2, 3, 255]), 100)]);
         // 2×2 RGBA 每帧 16 字节，上限 8 字节时一帧都放不下。
-        let err = decode_gif_with_limits(&gif, MAX_ANIMATION_FRAMES, 8).unwrap_err();
+        let err = decode_gif_with_limits(&gif, MAX_ANIMATION_FRAMES, 8, None).unwrap_err();
         assert!(
             matches!(err, ViewerError::Unsupported(_)),
             "expected Unsupported, got {err:?}"

@@ -18,6 +18,7 @@ image = { workspace = true, default-features = false, features = [
     "webp",
     "ico",
 ] }
+jpeg-decoder.workspace = true
 
 [lints]
 workspace = true

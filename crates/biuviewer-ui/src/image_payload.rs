@@ -5,12 +5,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use biuviewer_core::{TransformState, ViewerError};
+use biuviewer_core::{CancellationToken, TransformState, ViewerError};
 use biuviewer_decoder::{
-    decode_gif, decode_gif_first_frame, decode_static, FormatDetector, ImageFormat,
+    decode_gif_cancellable, decode_static, decode_thumbnail, FormatDetector, ImageFormat,
 };
 use gpui_kit::RenderImage;
-use image::imageops::FilterType;
 use image::{Delay, Frame, RgbaImage};
 
 use crate::theme::THUMBNAIL_EDGE;
@@ -34,17 +33,22 @@ impl LoadedImage {
 }
 
 /// 读取并解码文件。GIF 解码为多帧，其余格式解码为单帧。
-pub fn load_image(path: &Path) -> Result<LoadedImage, ViewerError> {
+/// 解码无法被强行打断，因此在读文件、解码前后和 GIF 每帧之间检查取消令牌。
+pub fn load_image(path: &Path, cancel: &CancellationToken) -> Result<LoadedImage, ViewerError> {
+    check_cancel(cancel)?;
     let raw = std::fs::read(path)?;
+    check_cancel(cancel)?;
     let extension = path.extension().and_then(|ext| ext.to_str());
     let format = FormatDetector::detect_with_extension(&raw, extension)?;
+    check_cancel(cancel)?;
 
     if format == ImageFormat::Gif {
-        let animation = decode_gif(&raw)?;
+        let animation = decode_gif_cancellable(&raw, cancel)?;
         let frames = animation.frames.len();
         let bytes = animation.byte_size();
         let mut render_frames = Vec::with_capacity(frames);
         for frame in animation.frames {
+            check_cancel(cancel)?;
             let mut bgra = frame.rgba;
             swap_red_blue(&mut bgra);
             let render_frame = into_frame(animation.width, animation.height, bgra, frame.delay)
@@ -61,6 +65,7 @@ pub fn load_image(path: &Path) -> Result<LoadedImage, ViewerError> {
     }
 
     let decoded = decode_static(&raw)?;
+    check_cancel(cancel)?;
     let bytes = decoded.rgba.len();
     let mut bgra = decoded.rgba;
     swap_red_blue(&mut bgra);
@@ -75,9 +80,20 @@ pub fn load_image(path: &Path) -> Result<LoadedImage, ViewerError> {
     })
 }
 
+fn check_cancel(cancel: &CancellationToken) -> Result<(), ViewerError> {
+    if cancel.is_cancelled() {
+        Err(ViewerError::Cancelled)
+    } else {
+        Ok(())
+    }
+}
+
 /// 解码发生在后台线程，第三方解码器理论上可能 panic。捕获后转成错误卡片，主程序不退出。
-pub fn load_image_catching_panics(path: &Path) -> Result<LoadedImage, ViewerError> {
-    match catch_unwind(AssertUnwindSafe(|| load_image(path))) {
+pub fn load_image_catching_panics(
+    path: &Path,
+    cancel: &CancellationToken,
+) -> Result<LoadedImage, ViewerError> {
+    match catch_unwind(AssertUnwindSafe(|| load_image(path, cancel))) {
         Ok(result) => result,
         Err(payload) => {
             let detail = panic_message(&payload);
@@ -93,26 +109,10 @@ pub fn load_thumbnail(path: &Path) -> Result<Arc<RenderImage>, ViewerError> {
     let extension = path.extension().and_then(|ext| ext.to_str());
     let format = FormatDetector::detect_with_extension(&raw, extension)?;
 
-    let (width, height, rgba) = if format == ImageFormat::Gif {
-        let first = decode_gif_first_frame(&raw)?;
-        (first.width, first.height, first.rgba)
-    } else {
-        let decoded = decode_static(&raw)?;
-        (decoded.width, decoded.height, decoded.rgba)
-    };
-
-    let source = RgbaImage::from_raw(width, height, rgba)
-        .ok_or_else(|| ViewerError::Corrupted(path.display().to_string()))?;
-    let (target_width, target_height) = fit_within(width, height, THUMBNAIL_EDGE);
-    let resized = if (target_width, target_height) == (width, height) {
-        source
-    } else {
-        image::imageops::resize(&source, target_width, target_height, FilterType::Triangle)
-    };
-
-    let mut bgra = resized.into_raw();
+    let decoded = decode_thumbnail(&raw, format, THUMBNAIL_EDGE)?;
+    let mut bgra = decoded.rgba;
     swap_red_blue(&mut bgra);
-    let frame = into_frame(target_width, target_height, bgra, PLACEHOLDER_DELAY)
+    let frame = into_frame(decoded.width, decoded.height, bgra, PLACEHOLDER_DELAY)
         .ok_or_else(|| ViewerError::Corrupted(path.display().to_string()))?;
     Ok(Arc::new(RenderImage::new(vec![frame])))
 }
@@ -218,20 +218,6 @@ fn into_frame(width: u32, height: u32, bgra: Vec<u8>, delay: Duration) -> Option
     ))
 }
 
-fn fit_within(width: u32, height: u32, edge: u32) -> (u32, u32) {
-    if width == 0 || height == 0 {
-        return (width, height);
-    }
-    let longest = width.max(height);
-    if longest <= edge {
-        return (width, height);
-    }
-    let scale = edge as f64 / longest as f64;
-    let target_width = ((width as f64 * scale).round() as u32).max(1);
-    let target_height = ((height as f64 * scale).round() as u32).max(1);
-    (target_width, target_height)
-}
-
 fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
     if let Some(message) = payload.downcast_ref::<&str>() {
         (*message).to_string()
@@ -245,14 +231,6 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn thumbnail_size_keeps_aspect_ratio() {
-        assert_eq!(fit_within(256, 128, 128), (128, 64));
-        assert_eq!(fit_within(100, 300, 128), (43, 128));
-        assert_eq!(fit_within(64, 64, 128), (64, 64));
-        assert_eq!(fit_within(0, 100, 128), (0, 100));
-    }
 
     #[test]
     fn file_urls_are_decoded() {

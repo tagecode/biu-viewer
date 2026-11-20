@@ -3,6 +3,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 pub mod cache;
+pub mod cancel;
 pub mod error;
 pub mod image_list;
 pub mod log;
@@ -11,6 +12,7 @@ pub mod transform;
 pub mod viewport;
 
 pub use cache::{InsertResult, MemoryCache};
+pub use cancel::CancellationToken;
 pub use error::ViewerError;
 pub use image_list::ImageList;
 pub use log::init_logging;

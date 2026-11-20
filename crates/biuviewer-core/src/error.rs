@@ -13,6 +13,9 @@ pub enum ViewerError {
     Corrupted(String),
     #[error("读取失败：{0}")]
     Io(String),
+    /// 任务在阶段边界发现已被更新的请求取代，结果不应展示。
+    #[error("已取消")]
+    Cancelled,
 }
 
 impl ViewerError {
@@ -46,8 +49,9 @@ mod tests {
             ViewerError::Unsupported("notes.txt".into()),
             ViewerError::Corrupted("broken.png".into()),
             ViewerError::Io("disk".into()),
+            ViewerError::Cancelled,
         ];
-        let expected = ["找不到", "没有权限", "不支持", "损坏", "读取失败"];
+        let expected = ["找不到", "没有权限", "不支持", "损坏", "读取失败", "已取消"];
         for (err, needle) in cases.into_iter().zip(expected) {
             let message = err.user_message();
             assert!(
