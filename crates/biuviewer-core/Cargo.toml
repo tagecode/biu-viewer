@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
+license.workspace = true
 description = "博览核心：错误、日志，以及与界面无关的查看逻辑"
 
 [dependencies]

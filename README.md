@@ -104,3 +104,7 @@ crates/
 ```
 
 依赖方向严格单向：`biuviewer → ui/platform/core`，`ui → core/decoder`，`platform → core`，`core` 不依赖工作区内其他 crate。
+
+## 许可证
+
+MIT，详见 [LICENSE](LICENSE)。
