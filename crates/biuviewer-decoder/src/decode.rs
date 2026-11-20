@@ -45,6 +45,14 @@ impl DecoderBackend for ImageCrateDecoder {
 
 /// 同步解码。先读尺寸并拒绝超限图片，再把像素转成 RGBA8。
 pub fn decode_static(bytes: &[u8]) -> Result<DecodedImage, ViewerError> {
+    match crate::format::FormatDetector::detect(bytes)? {
+        crate::format::ImageFormat::Heic => decode_heic(bytes),
+        crate::format::ImageFormat::Avif => decode_avif(bytes),
+        _ => decode_with_image_crate(bytes),
+    }
+}
+
+fn decode_with_image_crate(bytes: &[u8]) -> Result<DecodedImage, ViewerError> {
     let reader = ImageReader::new(Cursor::new(bytes))
         .with_guessed_format()
         .map_err(|err| ViewerError::Io(err.to_string()))?;
@@ -75,6 +83,71 @@ pub fn decode_static(bytes: &[u8]) -> Result<DecodedImage, ViewerError> {
         height,
         rgba: rgba.into_raw(),
     })
+}
+
+fn decode_heic(bytes: &[u8]) -> Result<DecodedImage, ViewerError> {
+    let mut limits = heif_oxide::Limits::default();
+    limits.max_pixels = usize::try_from(MAX_PIXELS).unwrap_or(usize::MAX);
+    limits.max_grid_tiles = 256;
+    limits.max_item_payload_bytes = 128 * 1024 * 1024;
+    limits.max_picture_memory_bytes = 512 * 1024 * 1024;
+
+    let image = heif_oxide::decode_bytes_with(bytes, &limits).map_err(map_heif_error)?;
+    let (width, height) = (image.width, image.height);
+    reject_oversized(width, height)?;
+    let rgba = image.to_rgba8();
+    validate_rgba_size(width, height, &rgba)?;
+    Ok(DecodedImage {
+        width,
+        height,
+        rgba,
+    })
+}
+
+fn decode_avif(bytes: &[u8]) -> Result<DecodedImage, ViewerError> {
+    let info = oxideav_avif::inspect(bytes)
+        .map_err(|err| ViewerError::Corrupted(format!("AVIF 解码失败：{err}")))?;
+    reject_oversized(info.width, info.height)?;
+    let image = oxideav_avif::decode(bytes)
+        .map_err(|err| ViewerError::Corrupted(format!("AVIF 解码失败：{err}")))?;
+    let width = image.width();
+    let height = image.height();
+    reject_oversized(width, height)?;
+    let rgba = image.to_rgba8();
+    validate_rgba_size(width, height, &rgba)?;
+    Ok(DecodedImage {
+        width,
+        height,
+        rgba,
+    })
+}
+
+fn map_heif_error(err: heif_oxide::HeifError) -> ViewerError {
+    use heif_oxide::HeifError;
+    match err {
+        HeifError::Io(err) => ViewerError::from(err),
+        HeifError::ImageTooLarge { .. }
+        | HeifError::UnsupportedCodec(_)
+        | HeifError::Unsupported(_) => ViewerError::Unsupported(format!("HEIC 解码失败：{err}")),
+        HeifError::NotHeif(_)
+        | HeifError::Truncated(_)
+        | HeifError::MissingBox(_)
+        | HeifError::Invalid(_)
+        | HeifError::Codec(_) => ViewerError::Corrupted(format!("HEIC 解码失败：{err}")),
+        _ => ViewerError::Corrupted(format!("HEIC 解码失败：{err}")),
+    }
+}
+
+fn validate_rgba_size(width: u32, height: u32, rgba: &[u8]) -> Result<(), ViewerError> {
+    let expected = u64::from(width)
+        .saturating_mul(u64::from(height))
+        .saturating_mul(4);
+    if expected != rgba.len() as u64 {
+        return Err(ViewerError::Corrupted(
+            "解码结果尺寸与像素缓冲不一致".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn reject_oversized(width: u32, height: u32) -> Result<(), ViewerError> {

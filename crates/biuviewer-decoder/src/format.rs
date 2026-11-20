@@ -10,6 +10,8 @@ pub enum ImageFormat {
     Webp,
     Tiff,
     Ico,
+    Heic,
+    Avif,
 }
 
 /// 先看文件头魔数，识别不了时再用扩展名兜底。
@@ -36,7 +38,8 @@ impl FormatDetector {
 
     pub fn supported_extensions() -> &'static [&'static str] {
         &[
-            "png", "jpg", "jpeg", "bmp", "gif", "webp", "tif", "tiff", "ico",
+            "png", "jpg", "jpeg", "bmp", "gif", "webp", "tif", "tiff", "ico", "heic", "heif",
+            "avif",
         ]
     }
 }
@@ -63,7 +66,54 @@ fn detect_magic(bytes: &[u8]) -> Option<ImageFormat> {
     if bytes.starts_with(&[0x00, 0x00, 0x01, 0x00]) {
         return Some(ImageFormat::Ico);
     }
-    None
+    detect_iso_bmff(bytes)
+}
+
+/// 识别 HEIF/HEIC 与 AVIF。两者都是 ISO BMFF，靠 `ftyp` 的 brand 区分。
+fn detect_iso_bmff(bytes: &[u8]) -> Option<ImageFormat> {
+    if bytes.len() < 16 || &bytes[4..8] != b"ftyp" {
+        return None;
+    }
+    let major = &bytes[8..12];
+    let mut is_avif = major == b"avif" || major == b"avis" || major == b"avio";
+    let mut is_heic = major == b"heic"
+        || major == b"heix"
+        || major == b"hevc"
+        || major == b"hevx"
+        || major == b"heim"
+        || major == b"heis"
+        || major == b"hevm"
+        || major == b"hevs";
+    let is_mif1 = major == b"mif1" || major == b"msf1";
+
+    // 兼容 brand 列表：box header 16 字节后每 4 字节一个 brand。
+    let mut offset = 16;
+    while offset + 4 <= bytes.len() {
+        let brand = &bytes[offset..offset + 4];
+        if brand == b"avif" || brand == b"avis" || brand == b"avio" {
+            is_avif = true;
+        }
+        if brand == b"heic"
+            || brand == b"heix"
+            || brand == b"hevc"
+            || brand == b"hevx"
+            || brand == b"heim"
+            || brand == b"heis"
+            || brand == b"hevm"
+            || brand == b"hevs"
+        {
+            is_heic = true;
+        }
+        offset += 4;
+    }
+
+    if is_avif {
+        Some(ImageFormat::Avif)
+    } else if is_heic || is_mif1 {
+        Some(ImageFormat::Heic)
+    } else {
+        None
+    }
 }
 
 fn format_from_extension(extension: &str) -> Option<ImageFormat> {
@@ -79,6 +129,8 @@ fn format_from_extension(extension: &str) -> Option<ImageFormat> {
         "webp" => Some(ImageFormat::Webp),
         "tif" | "tiff" => Some(ImageFormat::Tiff),
         "ico" => Some(ImageFormat::Ico),
+        "heic" | "heif" => Some(ImageFormat::Heic),
+        "avif" => Some(ImageFormat::Avif),
         _ => None,
     }
 }
@@ -130,12 +182,58 @@ mod tests {
     }
 
     #[test]
-    fn supported_extensions_cover_p0_formats() {
+    fn supported_extensions_cover_target_formats() {
         let extensions = FormatDetector::supported_extensions();
         for required in [
-            "png", "jpg", "jpeg", "bmp", "gif", "webp", "tif", "tiff", "ico",
+            "png", "jpg", "jpeg", "bmp", "gif", "webp", "tif", "tiff", "ico", "heic", "heif",
+            "avif",
         ] {
             assert!(extensions.contains(&required), "missing {required}");
         }
+    }
+
+    fn ftyp(major: &[u8; 4], compatible: &[&[u8; 4]]) -> Vec<u8> {
+        let size = 16 + compatible.len() * 4;
+        let mut bytes = Vec::with_capacity(size);
+        bytes.extend_from_slice(&(size as u32).to_be_bytes());
+        bytes.extend_from_slice(b"ftyp");
+        bytes.extend_from_slice(major);
+        bytes.extend_from_slice(&[0, 0, 0, 0]);
+        for brand in compatible {
+            bytes.extend_from_slice(*brand);
+        }
+        bytes
+    }
+
+    #[test]
+    fn detects_heic_and_avif_brands() {
+        assert_eq!(
+            FormatDetector::detect(&ftyp(b"heic", &[b"mif1"])).unwrap(),
+            ImageFormat::Heic
+        );
+        assert_eq!(
+            FormatDetector::detect(&ftyp(b"mif1", &[b"avif"])).unwrap(),
+            ImageFormat::Avif
+        );
+        assert_eq!(
+            FormatDetector::detect(&ftyp(b"avif", &[b"mif1"])).unwrap(),
+            ImageFormat::Avif
+        );
+        assert_eq!(
+            FormatDetector::detect(&ftyp(b"mif1", &[])).unwrap(),
+            ImageFormat::Heic
+        );
+    }
+
+    #[test]
+    fn heic_and_avif_extensions_are_recognized() {
+        assert_eq!(
+            FormatDetector::detect_with_extension(b"", Some("heif")).unwrap(),
+            ImageFormat::Heic
+        );
+        assert_eq!(
+            FormatDetector::detect_with_extension(b"", Some("AVIF")).unwrap(),
+            ImageFormat::Avif
+        );
     }
 }

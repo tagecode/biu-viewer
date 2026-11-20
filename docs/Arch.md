@@ -154,8 +154,8 @@ struct DecoderManager {
 | ICO | `image::ico::Decoder` | P0 | image crate 内置 |
 | GIF 动画 | `AnimatedGifDecoder` | P1 | 自定义实现,支持帧提取 |
 | APNG | `ApngDecoder` (apng crate) | P1 | 可选依赖 |
-| AVIF | `libavif-rs` | P1 | 动态加载 |
-| HEIC/HEIF | `heif-oxide` | P1/P2 | 动态加载 |
+| AVIF | `oxideav-avif` | P1 | 纯 Rust，静态链接 |
+| HEIC/HEIF | `heif-oxide`（rust_h265） | P1 | 纯 Rust，静态链接 |
 | SVG | `resvg` | P2 | 可选,转为位图 |
 
 #### 3.1.3 解码流程

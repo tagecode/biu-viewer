@@ -48,7 +48,7 @@ A lightweight, fast cross-platform image viewer written in Rust with GPUI. Open 
 
 ## 支持格式
 
-PNG、JPEG、GIF（含动画）、BMP、WebP、TIFF、ICO。
+PNG、JPEG、GIF（含动画）、BMP、WebP、TIFF、ICO、HEIC/HEIF、AVIF。
 
 格式识别优先读取文件头魔数，扩展名只作为兜底，因此「PNG 改名成 .jpg」也能正确显示。
 
@@ -82,7 +82,7 @@ cargo build --release
 - 当前版本**未做代码签名**：macOS 首次打开需右键「打开」或 `xattr -cr`，Windows 会触发 SmartScreen 提示
 - Linux 仅提供 x86_64 构建，需要系统具备 Vulkan 或 OpenGL 驱动
 - GIF 自动循环播放，暂不支持暂停 / 逐帧
-- 暂不支持 HEIC、AVIF、RAW 等格式
+- HEIC/AVIF 使用纯 Rust 解码器，暂不支持 RAW 等其他格式
 - 暂无图片删除、重命名等文件管理功能
 
 更多问题见 [docs/FAQ.md](docs/FAQ.md)。

@@ -11,7 +11,7 @@ pub type PlatformError = ViewerError;
 
 /// 与 `biuviewer-decoder::FormatDetector::supported_extensions` 保持一致的对话框过滤器。
 const IMAGE_EXTENSIONS: &[&str] = &[
-    "png", "jpg", "jpeg", "gif", "bmp", "webp", "tiff", "tif", "ico",
+    "png", "jpg", "jpeg", "gif", "bmp", "webp", "tiff", "tif", "ico", "heic", "heif", "avif",
 ];
 
 /// 使用系统原生对话框（macOS 的 NSOpenPanel、Windows 的 IFileDialog、Linux 的 XDG Portal）。

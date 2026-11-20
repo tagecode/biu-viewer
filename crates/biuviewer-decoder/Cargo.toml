@@ -19,6 +19,8 @@ image = { workspace = true, default-features = false, features = [
     "ico",
 ] }
 jpeg-decoder.workspace = true
+heif-oxide = "0.2"
+oxideav-avif = "0.0.18"
 
 [lints]
 workspace = true

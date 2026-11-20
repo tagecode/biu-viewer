@@ -55,7 +55,7 @@ BiuViewer 会读取 EXIF Orientation 并在解码时自动校正。若某张图�
 
 ### 支持 HEIC / AVIF / RAW 吗
 
-暂不支持。当前支持 PNG、JPEG、GIF、BMP、WebP、TIFF、ICO。HEIC 与 AVIF 在后续版本计划中。
+支持 HEIC/HEIF 与 AVIF，使用纯 Rust 解码器。RAW 暂不支持。当前完整格式列表：PNG、JPEG、GIF、BMP、WebP、TIFF、ICO、HEIC/HEIF、AVIF。
 
 ## 性能
 

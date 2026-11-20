@@ -203,6 +203,8 @@ impl ViewerApp {
     fn open_current(&mut self, cx: &mut Context<Self>) {
         self.cancel_load();
         self.cancel_prefetch();
+        // 让被取消的旧请求即使已在返回途中，也无法覆盖本次选择。
+        self.request_seq = self.request_seq.saturating_add(1);
         self.prefetch_generation += 1;
         self.prefetch_task = None;
 
