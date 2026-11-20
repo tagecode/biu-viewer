@@ -11,9 +11,10 @@ use crate::animation::decode_gif_first_frame;
 use crate::decode::{decode_static, reject_oversized, DecodedImage};
 use crate::exif::apply_exif_orientation;
 use crate::format::ImageFormat;
+use crate::iso_thumb::with_thumbnail_primary;
 
 /// 解码缩略图。`max_edge` 是长边上限；JPEG 会按 1/8、1/4、1/2 的 DCT 比例先缩小，
-/// 避免为了 128px 缩略图先分配整张 12MP 的 RGBA 缓冲。
+/// HEIC/AVIF 若带内嵌 `thmb` 缩略图则只解缩略图，避免为了 128px 先解整张照片。
 pub fn decode_thumbnail(
     bytes: &[u8],
     format: ImageFormat,
@@ -22,6 +23,14 @@ pub fn decode_thumbnail(
     if format == ImageFormat::Jpeg {
         if let Some(scaled) = decode_jpeg_scaled(bytes, max_edge)? {
             return Ok(scaled);
+        }
+    }
+
+    if matches!(format, ImageFormat::Heic | ImageFormat::Avif) {
+        if let Some(patched) = with_thumbnail_primary(bytes) {
+            if let Ok(decoded) = decode_static(&patched) {
+                return resize_to_fit(decoded, max_edge);
+            }
         }
     }
 

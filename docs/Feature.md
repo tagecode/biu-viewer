@@ -28,9 +28,9 @@
 | :--- | :--- | :--- |
 | PNG / JPEG / BMP / GIF / WebP / TIFF / ICO | P0 | 通过 `image` crate 覆盖常见格式 |
 | SVG | P1 | 轻量查看器可先不做，或作为可选解码后端 |
-| GIF / APNG / 动画 WebP 播放 | P1 | 按原生帧率播放，支持暂停/继续 |
-| AVIF | P1 | 作为可插拔解码后端 |
-| HEIC / HEIF | P1/P2 | 若目标用户含 iPhone 照片则提升到 P1，通过 `heif-oxide` 或 `libheif` 绑定实现 |
+| GIF / APNG / 动画 WebP 播放 | P1 | GIF 已支持暂停/继续与逐帧；APNG/动画 WebP 待做 |
+| AVIF | P1 | 已支持（`oxideav-avif`），缩略图优先复用内嵌 `thmb` |
+| HEIC / HEIF | P1 | 已支持（`heif-oxide` / rust_h265），缩略图优先复用内嵌 `thmb` |
 | 相机 RAW 嵌入预览 | P2 | 非轻量级必需，可作为后续扩展 |
 | 解码后端可插拔 | P1 | 默认走 `image` crate，特殊格式按需加载，避免主包膨胀 |
 

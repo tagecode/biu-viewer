@@ -7,6 +7,7 @@ mod decode;
 mod exif;
 mod folder;
 mod format;
+mod iso_thumb;
 mod thumbnail;
 
 /// 解码失败时使用核心错误类型，保证依赖方向指向 `biuviewer-core`。

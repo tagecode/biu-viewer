@@ -57,6 +57,8 @@ BiuViewer 会读取 EXIF Orientation 并在解码时自动校正。若某张图�
 
 支持 HEIC/HEIF 与 AVIF，使用纯 Rust 解码器。RAW 暂不支持。当前完整格式列表：PNG、JPEG、GIF、BMP、WebP、TIFF、ICO、HEIC/HEIF、AVIF。
 
+缩略图条会优先复用 HEIC/AVIF 文件内嵌的 `thmb` 缩略图，只解码这一小张；文件没有内嵌缩略图时（常见于部分 AVIF）才完整解码后再缩小，因此那个缩略图会慢一些。
+
 ## 性能
 
 ### 打开大文件夹很慢

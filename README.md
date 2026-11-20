@@ -87,6 +87,7 @@ cargo build --release
 - Linux 仅提供 x86_64 构建，需要系统具备 Vulkan 或 OpenGL 驱动
 - GIF 支持暂停 / 继续与逐帧查看（`Space`、`,` / `.`）
 - HEIC/AVIF 使用纯 Rust 解码器，暂不支持 RAW 等其他格式
+- HEIC/AVIF 缩略图优先使用文件内嵌的 `thmb` 缩略图；没有内嵌缩略图时仍需完整解码后再缩小
 - 暂无图片删除、重命名等文件管理功能
 
 更多问题见 [docs/FAQ.md](docs/FAQ.md)。
