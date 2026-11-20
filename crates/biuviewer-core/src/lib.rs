@@ -4,6 +4,7 @@
 
 pub mod cache;
 pub mod cancel;
+pub mod config;
 pub mod error;
 pub mod image_list;
 pub mod log;
@@ -13,6 +14,7 @@ pub mod viewport;
 
 pub use cache::{InsertResult, MemoryCache};
 pub use cancel::CancellationToken;
+pub use config::{AppConfig, WindowConfig};
 pub use error::ViewerError;
 pub use image_list::ImageList;
 pub use log::init_logging;

@@ -51,7 +51,7 @@ BiuViewer 会读取 EXIF Orientation 并在解码时自动校正。若某张图�
 
 ### GIF 能暂停吗
 
-暂不支持。GIF 会自动循环播放；按左右方向键切走即可停止。
+可以。按 `Space` 暂停 / 继续，暂停后用 `,` / `.` 逐帧前后查看；工具栏在打开动画时也会出现对应按钮。暂停只是停止计时，不会重置到第一帧。
 
 ### 支持 HEIC / AVIF / RAW 吗
 
@@ -75,7 +75,13 @@ BiuViewer 会读取 EXIF Orientation 并在解码时自动校正。若某张图�
 
 ### 有没有设置项 / 配置文件
 
-没有。BiuViewer 不写配置文件、不记录浏览历史，所有状态在关闭窗口后丢弃。
+没有可视化设置页，但会保存少量查看偏好：窗口位置与大小、缩放模式（适应 / 1:1）、缩略图开关。配置文件位置：
+
+- Windows：`%APPDATA%\BiuViewer\config.txt`
+- macOS：`~/Library/Application Support/BiuViewer/config.txt`
+- Linux：`$XDG_CONFIG_HOME/biuviewer/config.txt`（默认 `~/.config/biuviewer/config.txt`）
+
+删除该文件即可恢复默认；不记录浏览历史。
 
 ### 如何反馈问题
 

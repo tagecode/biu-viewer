@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use biuviewer_core::{
-    CancellationToken, Extent, FileDialogService, ImageList, MemoryCache, Offset, ScaleMode,
-    TransformState, ViewerError, Viewport,
+    AppConfig, CancellationToken, Extent, FileDialogService, ImageList, MemoryCache, Offset,
+    ScaleMode, TransformState, ViewerError, Viewport,
 };
 use biuviewer_decoder::{is_supported_path, FolderScanner};
 use gpui_kit::{
@@ -85,6 +85,7 @@ pub struct ViewerApp {
     prefetch_cancel: Option<CancellationToken>,
     animation_task: Option<Task<()>>,
     animation_generation: u64,
+    animation_paused: bool,
     frame_index: usize,
     viewport_size: Extent,
     image_area_bounds: Rc<Cell<Bounds<Pixels>>>,
@@ -93,6 +94,8 @@ pub struct ViewerApp {
     fullscreen: bool,
     toolbar_hover: bool,
     show_thumbnails: bool,
+    config: AppConfig,
+    close_hook_installed: bool,
     dragging: Option<Point<Pixels>>,
     drop_active: bool,
     last_mouse: Option<Point<Pixels>>,
@@ -106,9 +109,11 @@ impl ViewerApp {
         dialog: Arc<dyn FileDialogService>,
         initial: Option<PathBuf>,
         open_paths: Arc<Mutex<Vec<PathBuf>>>,
+        config: AppConfig,
         cx: &mut Context<Self>,
     ) -> Self {
         let focus_handle = cx.focus_handle();
+        let show_thumbnails = config.show_thumbnails;
         let mut app = Self {
             dialog,
             dialog_in_flight: false,
@@ -137,6 +142,7 @@ impl ViewerApp {
             prefetch_cancel: None,
             animation_task: None,
             animation_generation: 0,
+            animation_paused: false,
             frame_index: 0,
             viewport_size: Extent::default(),
             image_area_bounds: Rc::new(Cell::new(Bounds::default())),
@@ -144,7 +150,9 @@ impl ViewerApp {
             focus_requested: false,
             fullscreen: false,
             toolbar_hover: false,
-            show_thumbnails: true,
+            show_thumbnails,
+            config,
+            close_hook_installed: false,
             dragging: None,
             drop_active: false,
             last_mouse: None,
@@ -220,6 +228,7 @@ impl ViewerApp {
 
         self.transform.reset();
         self.frame_index = 0;
+        self.animation_paused = false;
         self.error = None;
         self.error_path = None;
         self.banner = None;
@@ -409,10 +418,19 @@ impl ViewerApp {
         self.error_path = None;
         self.loaded = Some(loaded);
         self.rebuild_display();
-        self.view = Viewport::fit(self.display_extent(), self.viewport_size);
+        self.view = self.preferred_view();
         self.start_animation(cx);
         self.start_prefetch(cx);
         cx.notify();
+    }
+
+    /// 新图加载完成后按配置选择初始缩放；自定义缩放无法跨图恢复，退回适应窗口。
+    fn preferred_view(&self) -> Viewport {
+        let image = self.display_extent();
+        match self.config.scale_mode {
+            ScaleMode::Actual => Viewport::actual(image, self.viewport_size, self.scale_factor),
+            ScaleMode::Fit | ScaleMode::Custom => Viewport::fit(image, self.viewport_size),
+        }
     }
 
     fn clear_image(&mut self) {
@@ -430,6 +448,7 @@ impl ViewerApp {
         self.cache.set_pinned(None);
         self.animation_generation += 1;
         self.animation_task = None;
+        self.animation_paused = false;
     }
 
     fn show_banner(&mut self, err: ViewerError, cx: &mut Context<Self>) {
@@ -497,6 +516,9 @@ impl ViewerApp {
     }
 
     fn start_animation(&mut self, cx: &mut Context<Self>) {
+        if self.animation_paused {
+            return;
+        }
         self.animation_generation += 1;
         self.animation_task = None;
 
@@ -550,6 +572,54 @@ impl ViewerApp {
         }));
     }
 
+    /// 暂停时直接丢计时任务，不靠空转轮询；恢复时从当前帧继续。
+    fn pause_animation(&mut self) {
+        self.animation_paused = true;
+        self.animation_generation += 1;
+        self.animation_task = None;
+    }
+
+    pub(crate) fn toggle_animation(&mut self, cx: &mut Context<Self>) {
+        if !self.has_animation() {
+            return;
+        }
+        if self.animation_paused {
+            self.animation_paused = false;
+            self.start_animation(cx);
+        } else {
+            self.pause_animation();
+        }
+        cx.notify();
+    }
+
+    /// 逐帧查看。播放中按帧键会先暂停，避免刚看完一帧又跳走。
+    pub(crate) fn step_animation(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let Some(loaded) = self.loaded.clone().filter(|loaded| loaded.is_animated()) else {
+            return;
+        };
+        if !self.animation_paused {
+            self.pause_animation();
+        }
+        let frames = loaded.frames.max(1);
+        let current = self.frame_index.min(frames - 1);
+        let next = stepped_frame_index(current, frames, delta);
+        if next != current {
+            self.frame_index = next;
+            self.rebuild_display();
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn is_animation_paused(&self) -> bool {
+        self.animation_paused
+    }
+
+    pub(crate) fn has_animation(&self) -> bool {
+        self.loaded
+            .as_ref()
+            .is_some_and(|loaded| loaded.is_animated())
+    }
+
     // ------------------------------------------------------------------
     // 视口操作
     // ------------------------------------------------------------------
@@ -577,6 +647,7 @@ impl ViewerApp {
             return;
         }
         self.view = Viewport::fit(image, self.viewport_size);
+        self.remember_scale_mode(ScaleMode::Fit);
         cx.notify();
     }
 
@@ -586,7 +657,31 @@ impl ViewerApp {
             return;
         }
         self.view = Viewport::actual(image, self.viewport_size, self.scale_factor);
+        self.remember_scale_mode(ScaleMode::Actual);
         cx.notify();
+    }
+
+    fn remember_scale_mode(&mut self, mode: ScaleMode) {
+        if self.config.scale_mode == mode {
+            return;
+        }
+        self.config.scale_mode = mode;
+        self.save_config();
+    }
+
+    fn save_config(&self) {
+        if let Err(err) = self.config.save() {
+            tracing::warn!("保存配置失败: {err}");
+        }
+    }
+
+    fn remember_window_bounds(&mut self, bounds: Bounds<Pixels>) {
+        let window = &mut self.config.window;
+        window.x = f32::from(bounds.origin.x);
+        window.y = f32::from(bounds.origin.y);
+        window.width = f32::from(bounds.size.width);
+        window.height = f32::from(bounds.size.height);
+        self.save_config();
     }
 
     fn is_pannable(&self) -> bool {
@@ -653,6 +748,7 @@ impl ViewerApp {
         self.rebuild_display();
         // 重置同时恢复适应窗口（T12：重置回到 Fit 模式）。
         self.view = Viewport::fit(self.display_extent(), self.viewport_size);
+        self.remember_scale_mode(ScaleMode::Fit);
         cx.notify();
     }
 
@@ -815,6 +911,9 @@ impl ViewerApp {
             "-" => self.zoom_out(cx),
             "0" => self.fit_to_window(cx),
             "f" | "f11" => self.toggle_fullscreen(window, cx),
+            "space" => self.toggle_animation(cx),
+            "," => self.step_animation(-1, cx),
+            "." => self.step_animation(1, cx),
             "escape" => {
                 if window.is_fullscreen() {
                     self.toggle_fullscreen(window, cx);
@@ -1320,6 +1419,15 @@ impl ViewerApp {
 
 impl Render for ViewerApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if !self.close_hook_installed {
+            self.close_hook_installed = true;
+            let weak = cx.weak_entity();
+            window.on_window_should_close(cx, move |window, cx| {
+                let bounds = window.window_bounds().get_bounds();
+                let _ = weak.update(cx, |this, _cx| this.remember_window_bounds(bounds));
+                true
+            });
+        }
         self.render_root(window, cx)
     }
 }
@@ -1401,6 +1509,8 @@ impl ViewerApp {
 
     pub(crate) fn toggle_thumbnails(&mut self, cx: &mut Context<Self>) {
         self.show_thumbnails = !self.show_thumbnails;
+        self.config.show_thumbnails = self.show_thumbnails;
+        self.save_config();
         cx.notify();
     }
 
@@ -1459,9 +1569,16 @@ fn thumbnail_slot_weight_for_bytes(bytes: u64) -> usize {
     }
 }
 
+/// 逐帧步进时把下标夹在有效范围内，不绕回另一端。
+fn stepped_frame_index(current: usize, frames: usize, delta: isize) -> usize {
+    let frames = frames.max(1);
+    let current = current.min(frames - 1);
+    (current as isize + delta).clamp(0, frames as isize - 1) as usize
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{thumbnail_slot_weight_for_bytes, visible_index_range};
+    use super::{stepped_frame_index, thumbnail_slot_weight_for_bytes, visible_index_range};
 
     const ITEM: f32 = 68.0;
 
@@ -1497,5 +1614,14 @@ mod tests {
     #[test]
     fn negative_offset_is_treated_as_no_scroll() {
         assert_eq!(visible_index_range(-500.0, 680.0, 1000, ITEM), (0, 12));
+    }
+
+    #[test]
+    fn frame_stepping_clamps_at_both_ends() {
+        assert_eq!(stepped_frame_index(0, 5, -1), 0);
+        assert_eq!(stepped_frame_index(0, 5, 1), 1);
+        assert_eq!(stepped_frame_index(4, 5, 1), 4);
+        assert_eq!(stepped_frame_index(3, 5, 1), 4);
+        assert_eq!(stepped_frame_index(2, 0, 1), 0);
     }
 }

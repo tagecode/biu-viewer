@@ -32,6 +32,9 @@ impl ViewerApp {
             .child(zoom);
         if let Some(frames) = frames {
             right = right.child(frames);
+            if self.is_animation_paused() {
+                right = right.child("已暂停");
+            }
         }
 
         div()

@@ -53,6 +53,9 @@ impl ViewerApp {
             .border_b(px(1.0))
             .border_color(theme::BORDER);
 
+        let has_animation = self.has_animation();
+        let animation_paused = self.is_animation_paused();
+
         bar = bar
             .child(Self::tool_button(
                 "tb-open",
@@ -92,7 +95,45 @@ impl ViewerApp {
                 total > 1,
                 cx,
                 |this, _window, cx| this.next_image(cx),
-            ))
+            ));
+
+        if has_animation {
+            bar = bar
+                .child(Self::tool_button(
+                    "tb-frame-prev",
+                    "‹",
+                    "上一帧 (,)",
+                    true,
+                    cx,
+                    |this, _window, cx| this.step_animation(-1, cx),
+                ))
+                .child(Self::tool_button(
+                    if animation_paused {
+                        "tb-anim-play"
+                    } else {
+                        "tb-anim-pause"
+                    },
+                    if animation_paused { "播放" } else { "暂停" },
+                    if animation_paused {
+                        "继续动画 (空格)"
+                    } else {
+                        "暂停动画 (空格)"
+                    },
+                    true,
+                    cx,
+                    |this, _window, cx| this.toggle_animation(cx),
+                ))
+                .child(Self::tool_button(
+                    "tb-frame-next",
+                    "›",
+                    "下一帧 (.)",
+                    true,
+                    cx,
+                    |this, _window, cx| this.step_animation(1, cx),
+                ));
+        }
+
+        bar = bar
             .child(Self::divider())
             .child(Self::tool_button(
                 "tb-zoom-out",

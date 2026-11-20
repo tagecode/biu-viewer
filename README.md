@@ -40,9 +40,13 @@ A lightweight, fast cross-platform image viewer written in Rust with GPUI. Open 
 | 顺时针 / 逆时针旋转 | `R` / `⇧R` |
 | 水平 / 垂直翻转 | `H` / `V` |
 | 进入 / 退出全屏 | `F` 或 `F11` |
+| 暂停 / 继续 GIF | `Space` |
+| 上一帧 / 下一帧 | `,` / `.` |
 | 关闭提示条 / 退出全屏 | `Esc` |
 
 鼠标：滚轮缩放（以光标位置为锚点），按住左键拖拽平移，点击工具栏「缩略图」开关底部缩略图条。
+
+配置：自动记住窗口位置/大小、缩放模式（适应 / 1:1）与缩略图开关。文件在 `%APPDATA%\BiuViewer\config.txt`（Windows）、`~/Library/Application Support/BiuViewer/config.txt`（macOS）、`~/.config/biuviewer/config.txt`（Linux），删除即恢复默认。
 
 命令行：`biuviewer <图片或文件夹路径>`，也可把文件 / 文件夹直接拖入窗口。
 
@@ -81,7 +85,7 @@ cargo build --release
 
 - 当前版本**未做代码签名**：macOS 首次打开需右键「打开」或 `xattr -cr`，Windows 会触发 SmartScreen 提示
 - Linux 仅提供 x86_64 构建，需要系统具备 Vulkan 或 OpenGL 驱动
-- GIF 自动循环播放，暂不支持暂停 / 逐帧
+- GIF 支持暂停 / 继续与逐帧查看（`Space`、`,` / `.`）
 - HEIC/AVIF 使用纯 Rust 解码器，暂不支持 RAW 等其他格式
 - 暂无图片删除、重命名等文件管理功能
 
