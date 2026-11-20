@@ -1,7 +1,7 @@
 //! 主视图：负责图片加载、视口交互、动画与窗口级事件。
 
 use std::cell::Cell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
@@ -31,7 +31,10 @@ use crate::theme::{
 const LOADING_DELAY: Duration = Duration::from_millis(150);
 const CACHE_BUDGET: usize = 512 * 1024 * 1024;
 const THUMBNAIL_CACHE_BUDGET: usize = 64 * 1024 * 1024;
+/// 缩略图并发总槽位；单张大图按文件大小占用多个槽位，避免同时解多张 12MP 照片。
 const THUMBNAIL_CONCURRENCY: usize = 24;
+const THUMBNAIL_MEDIUM_BYTES: u64 = 1024 * 1024;
+const THUMBNAIL_LARGE_BYTES: u64 = 4 * 1024 * 1024;
 const OPEN_URLS_INTERVAL: Duration = Duration::from_millis(200);
 const ZOOM_STEP: f32 = 1.25;
 const WHEEL_ZOOM_SENSITIVITY: f32 = 0.0015;
@@ -62,7 +65,7 @@ pub struct ViewerApp {
     pending_texture_drops: Vec<Arc<RenderImage>>,
     cache: MemoryCache<LoadedImage>,
     thumb_cache: MemoryCache<RenderImage>,
-    thumb_in_flight: HashSet<PathBuf>,
+    thumb_in_flight: HashMap<PathBuf, usize>,
     thumb_failed: HashSet<PathBuf>,
     thumb_scroll: ScrollHandle,
     load_state: LoadState,
@@ -73,6 +76,8 @@ pub struct ViewerApp {
     request_seq: u64,
     load_task: Option<Task<()>>,
     load_timer: Option<Task<()>>,
+    prefetch_task: Option<Task<()>>,
+    prefetch_generation: u64,
     animation_task: Option<Task<()>>,
     animation_generation: u64,
     frame_index: usize,
@@ -109,7 +114,7 @@ impl ViewerApp {
             pending_texture_drops: Vec::new(),
             cache: MemoryCache::new(CACHE_BUDGET),
             thumb_cache: MemoryCache::new(THUMBNAIL_CACHE_BUDGET),
-            thumb_in_flight: HashSet::new(),
+            thumb_in_flight: HashMap::new(),
             thumb_failed: HashSet::new(),
             thumb_scroll: ScrollHandle::new(),
             load_state: LoadState::Idle,
@@ -120,6 +125,8 @@ impl ViewerApp {
             request_seq: 0,
             load_task: None,
             load_timer: None,
+            prefetch_task: None,
+            prefetch_generation: 0,
             animation_task: None,
             animation_generation: 0,
             frame_index: 0,
@@ -190,6 +197,9 @@ impl ViewerApp {
     }
 
     fn open_current(&mut self, cx: &mut Context<Self>) {
+        self.prefetch_generation += 1;
+        self.prefetch_task = None;
+
         let Some(path) = self.image_list.current_path().map(PathBuf::from) else {
             self.clear_image();
             cx.notify();
@@ -244,6 +254,61 @@ impl ViewerApp {
     fn next_request(&mut self) -> u64 {
         self.request_seq += 1;
         self.request_seq
+    }
+
+    /// 当前图就绪后预取前后各一张，结果只进缓存、不 pin；翻页命中时直接复用。
+    /// 用单独的 generation 丢弃过期结果，避免快速翻页时旧预取覆盖新状态。
+    fn start_prefetch(&mut self, cx: &mut Context<Self>) {
+        self.prefetch_generation += 1;
+        self.prefetch_task = None;
+
+        if self.load_state != LoadState::Ready || self.image_list.is_empty() {
+            return;
+        }
+        let candidates: Vec<PathBuf> = self
+            .image_list
+            .neighbor_indices(1)
+            .into_iter()
+            .filter_map(|index| self.image_list.get(index).map(PathBuf::from))
+            .filter(|path| !self.cache.contains(path))
+            .collect();
+        if candidates.is_empty() {
+            return;
+        }
+
+        let generation = self.prefetch_generation;
+        self.prefetch_task = Some(cx.spawn(async move |weak, cx| {
+            for path in candidates {
+                let decode_path = path.clone();
+                let decode = cx
+                    .background_executor()
+                    .spawn(async move { load_image_catching_panics(&decode_path) });
+                let Ok(loaded) = decode.await else {
+                    continue;
+                };
+                let keep_going = weak.update(cx, |this, _cx| {
+                    if this.prefetch_generation != generation
+                        || !this.image_list.paths().contains(&path)
+                    {
+                        return false;
+                    }
+                    if this.cache.contains(&path) {
+                        return true;
+                    }
+                    let bytes = loaded.bytes;
+                    let inserted = this.cache.insert(path.clone(), Arc::new(loaded), bytes);
+                    if inserted.inserted {
+                        for (_, evicted) in inserted.evicted {
+                            this.pending_texture_drops.push(evicted.image.clone());
+                        }
+                    }
+                    true
+                });
+                if !keep_going.unwrap_or(false) {
+                    break;
+                }
+            }
+        }));
     }
 
     fn on_loaded(
@@ -301,10 +366,13 @@ impl ViewerApp {
         self.rebuild_display();
         self.view = Viewport::fit(self.display_extent(), self.viewport_size);
         self.start_animation(cx);
+        self.start_prefetch(cx);
         cx.notify();
     }
 
     fn clear_image(&mut self) {
+        self.prefetch_generation += 1;
+        self.prefetch_task = None;
         self.loaded = None;
         self.set_display(None);
         self.load_state = LoadState::Idle;
@@ -827,9 +895,10 @@ impl ViewerApp {
             return;
         }
         let (first, last) = self.visible_thumbnail_range();
+        let mut slots: usize = self.thumb_in_flight.values().sum();
 
         for index in first..last {
-            if self.thumb_in_flight.len() >= THUMBNAIL_CONCURRENCY {
+            if slots >= THUMBNAIL_CONCURRENCY {
                 break;
             }
             let Some(path) = self.image_list.get(index).map(PathBuf::from) else {
@@ -837,11 +906,18 @@ impl ViewerApp {
             };
             if self.thumb_cache.contains(&path)
                 || self.thumb_failed.contains(&path)
-                || self.thumb_in_flight.contains(&path)
+                || self.thumb_in_flight.contains_key(&path)
             {
                 continue;
             }
-            self.thumb_in_flight.insert(path.clone());
+            // 大文件解出的缩略图占用更多解码内存，按文件大小折算槽位；
+            // 单张超过总预算时也允许它单独跑，避免永远不生成缩略图。
+            let weight = thumbnail_slot_weight(&path).min(THUMBNAIL_CONCURRENCY);
+            if slots + weight > THUMBNAIL_CONCURRENCY {
+                continue;
+            }
+            slots += weight;
+            self.thumb_in_flight.insert(path.clone(), weight);
             let decode_path = path.clone();
             let decode = cx
                 .background_executor()
@@ -1282,11 +1358,39 @@ fn visible_index_range(
     (first, last)
 }
 
+/// 按文件大小把一张缩略图折算成并发槽位。缩略图本身固定 128px，
+/// 但解码器仍需先得到全分辨率像素，大文件因此按比例多占槽位。
+fn thumbnail_slot_weight(path: &Path) -> usize {
+    let bytes = std::fs::metadata(path)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    thumbnail_slot_weight_for_bytes(bytes)
+}
+
+fn thumbnail_slot_weight_for_bytes(bytes: u64) -> usize {
+    if bytes <= THUMBNAIL_MEDIUM_BYTES {
+        1
+    } else if bytes <= THUMBNAIL_LARGE_BYTES {
+        3
+    } else {
+        6
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::visible_index_range;
+    use super::{thumbnail_slot_weight_for_bytes, visible_index_range};
 
     const ITEM: f32 = 68.0;
+
+    #[test]
+    fn thumbnail_slots_grow_with_file_size() {
+        assert_eq!(thumbnail_slot_weight_for_bytes(0), 1);
+        assert_eq!(thumbnail_slot_weight_for_bytes(1024 * 1024), 1);
+        assert_eq!(thumbnail_slot_weight_for_bytes(1024 * 1024 + 1), 3);
+        assert_eq!(thumbnail_slot_weight_for_bytes(4 * 1024 * 1024), 3);
+        assert_eq!(thumbnail_slot_weight_for_bytes(4 * 1024 * 1024 + 1), 6);
+    }
 
     #[test]
     fn range_starts_at_zero_without_scrolling() {

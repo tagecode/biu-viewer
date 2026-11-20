@@ -8,8 +8,8 @@ use crate::exif::apply_exif_orientation;
 
 /// 单边像素上限。超过后拒绝解码，避免按声明尺寸分配内存。
 pub const MAX_EDGE: u32 = 32_768;
-/// 总像素上限。
-pub const MAX_PIXELS: u64 = 200_000_000;
+/// 总像素上限。100MP 的 RGBA8 缓冲约 400MB，再大需要降采样或瓦片，当前直接拒绝。
+pub const MAX_PIXELS: u64 = 100_000_000;
 
 /// 解码后的 RGBA8 像素缓冲。行优先，每个像素 4 字节。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,7 +77,7 @@ pub fn decode_static(bytes: &[u8]) -> Result<DecodedImage, ViewerError> {
     })
 }
 
-fn reject_oversized(width: u32, height: u32) -> Result<(), ViewerError> {
+pub(crate) fn reject_oversized(width: u32, height: u32) -> Result<(), ViewerError> {
     let pixels = u64::from(width).saturating_mul(u64::from(height));
     if width > MAX_EDGE || height > MAX_EDGE || pixels > MAX_PIXELS {
         return Err(ViewerError::Unsupported(format!(

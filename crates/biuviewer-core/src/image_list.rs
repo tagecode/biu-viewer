@@ -63,6 +63,21 @@ impl ImageList {
         false
     }
 
+    /// 当前图片前后各 `radius` 张的索引，按距离由近到远排列，不包含当前项。
+    pub fn neighbor_indices(&self, radius: usize) -> Vec<usize> {
+        let mut indices = Vec::with_capacity(radius.saturating_mul(2));
+        for distance in 1..=radius {
+            if let Some(previous) = self.current.checked_sub(distance) {
+                indices.push(previous);
+            }
+            let next = self.current.saturating_add(distance);
+            if next < self.paths.len() {
+                indices.push(next);
+            }
+        }
+        indices
+    }
+
     /// 末张再往后保持不动。返回值表示索引是否改变。
     #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> bool {
@@ -152,6 +167,31 @@ mod tests {
         assert_eq!(list.current_index(), 2);
         assert!(list.first());
         assert_eq!(list.current_index(), 0);
+    }
+
+    #[test]
+    fn neighbors_are_ordered_by_distance_and_exclude_current() {
+        let list = ImageList::new(paths(&["a", "b", "c", "d", "e"]), 2);
+        assert_eq!(list.neighbor_indices(0), Vec::<usize>::new());
+        assert_eq!(list.neighbor_indices(1), vec![1, 3]);
+        assert_eq!(list.neighbor_indices(2), vec![1, 3, 0, 4]);
+    }
+
+    #[test]
+    fn neighbors_stop_at_both_ends() {
+        let list = ImageList::new(paths(&["a", "b", "c"]), 0);
+        assert_eq!(list.neighbor_indices(1), vec![1]);
+        assert_eq!(list.neighbor_indices(2), vec![1, 2]);
+
+        let list = ImageList::new(paths(&["a", "b", "c"]), 2);
+        assert_eq!(list.neighbor_indices(1), vec![1]);
+        assert_eq!(list.neighbor_indices(2), vec![1, 0]);
+    }
+
+    #[test]
+    fn empty_list_has_no_neighbors() {
+        let list = ImageList::empty();
+        assert!(list.neighbor_indices(2).is_empty());
     }
 
     #[test]

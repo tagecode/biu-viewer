@@ -11,7 +11,10 @@ mod format;
 /// 解码失败时使用核心错误类型，保证依赖方向指向 `biuviewer-core`。
 pub type DecodeError = biuviewer_core::ViewerError;
 
-pub use animation::{decode_gif, DecodedAnimation, DecodedFrame};
+pub use animation::{
+    decode_gif, decode_gif_first_frame, DecodedAnimation, DecodedFrame, MAX_ANIMATION_BYTES,
+    MAX_ANIMATION_FRAMES,
+};
 pub use decode::{
     decode_static, DecodedImage, DecoderBackend, ImageCrateDecoder, MAX_EDGE, MAX_PIXELS,
 };

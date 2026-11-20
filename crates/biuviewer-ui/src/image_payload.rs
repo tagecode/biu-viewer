@@ -6,7 +6,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use biuviewer_core::{TransformState, ViewerError};
-use biuviewer_decoder::{decode_gif, decode_static, FormatDetector, ImageFormat};
+use biuviewer_decoder::{
+    decode_gif, decode_gif_first_frame, decode_static, FormatDetector, ImageFormat,
+};
 use gpui_kit::RenderImage;
 use image::imageops::FilterType;
 use image::{Delay, Frame, RgbaImage};
@@ -92,13 +94,8 @@ pub fn load_thumbnail(path: &Path) -> Result<Arc<RenderImage>, ViewerError> {
     let format = FormatDetector::detect_with_extension(&raw, extension)?;
 
     let (width, height, rgba) = if format == ImageFormat::Gif {
-        let animation = decode_gif(&raw)?;
-        let frame = animation
-            .frames
-            .into_iter()
-            .next()
-            .ok_or_else(|| ViewerError::Corrupted(path.display().to_string()))?;
-        (animation.width, animation.height, frame.rgba)
+        let first = decode_gif_first_frame(&raw)?;
+        (first.width, first.height, first.rgba)
     } else {
         let decoded = decode_static(&raw)?;
         (decoded.width, decoded.height, decoded.rgba)
