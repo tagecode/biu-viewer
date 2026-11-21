@@ -91,6 +91,37 @@ Windows `v0.1.2` 上同样三种场景：截断 PNG 与 `icacls` 拒绝访问的
 - **GUI（Xvfb，X11）**：在 `Xvfb :99` 下创建了标题为 `BiuViewer` 的 960×640 窗口，进程存活，适配器为 `llvmpipe`（Vulkan）；`scrot` 截取根窗口为全黑（无合成器、窗口为 32 位 ARGB），因此该截图不作为渲染通过的证据。
 - **边界**：第 17 项在 Linux 上通过（产物完整、按 README 可启动）。WSLg 的 GPU 经 D3D12 转译且系统无中文字体，不能替代真实 Linux 桌面；第 1–16 项（对话框/拖拽、格式、EXIF、GIF、内存、性能、X11 与 Wayland 差异）仍需实机执行。
 
+## WSL Linux 预验收（0.2.0，2026-11-21）
+
+这不是实机验收，只用于在本地尽早发现 Linux 路径问题。
+
+- **环境**：WSL2 Ubuntu 22.04.5 LTS（glibc 2.35），内核 `6.18.58.1-microsoft-standard-WSL2`；Xvfb `:99` + openbox + xcompmgr，GPU 为 `llvmpipe`（Vulkan）与 D3D12 转译的 GL 适配器。
+- **产物**：本地 `cargo build --release --target x86_64-unknown-linux-gnu -p biuviewer`，再执行 `scripts/bundle-linux.sh`；安装到 `/tmp/biu-prefix`，`--version` 输出 `biuviewer 0.2.0`，最高 glibc 需求 `GLIBC_2.35`，`ldd` 无缺失项。
+- **方法**：X11 下用 `xdotool` 注入按键/鼠标，用 `import -window` 截取窗口做像素/视觉判定；WSLg 仅做 Wayland 启动与视觉冒烟。Xvfb 的窗口是 32 位 ARGB，必须先启动 `xcompmgr`，否则截图全黑；Xvfb 默认没有 XInput 指针，需用 `xinput --create-master` 创建虚拟指针后鼠标才可用。
+- **结果**：
+
+| # | 结果 | 证据 / 说明 |
+| :--- | :---: | :--- |
+| 1 | ❌ 环境不可用 | rfd 走 XDG portal 报 `Failed to connect to address unix:path=/run/user/1000/bus`，无 zenity 回退；属 WSL 无桌面会话，不能据此判定应用缺陷，需真实桌面重测 |
+| 2 | ☐ 未执行 | WSL 无 Linux 文件管理器，WSLg 也不桥接 Windows 资源管理器拖放 |
+| 3 | ✅ | 命令行打开 `target/wsl/assets` 与单图均正常；`--version` 为 0.2.0 |
+| 4 | ✅ | 点击第 3 个缩略图切到 `exif1.jpg`（3/14），高亮跟随 |
+| 5 | ✅ | `→`/`←` 逐张切换，`Home`/`End` 到首尾 |
+| 6 | ✅ | 320×240 为 100%；4000×3000 `large.jpg` 适应为 16%，小图不放大 |
+| 7 | ✅ | `+` 连按 10 次到 148%，标签变「自定义」；`-` 可回退 |
+| 8 | ✅ | 148% 下向左上拖拽，画面裁剪位置随鼠标变化 |
+| 9 | ⚠️ 部分 | `R` 旋转后 4000×3000 变 3000×4000，连按 4 次复原；翻转未单独截图 |
+| 10 | ❌ 未通过（Xvfb） | `F11` 与工具栏「全屏」均未改变 960×640 窗口几何，openbox 下 `_NET_WM_STATE` 无 `FULLSCREEN`；需在真实桌面复核，若复现则为 Linux 发布阻塞 |
+| 11 | ✅ | `exif6.jpg` 存储 200×100、Orientation=6，显示为 100×200 竖图 |
+| 12 | ✅ | `anim2.gif` 3 帧、5 ms/帧（被钳到 100 ms），截到红/绿帧；空格显示「已暂停」，`.` 步进到蓝帧 |
+| 13 | ✅ | PNG/JPEG/GIF/BMP/WebP/TIFF/ICO + HEIC/AVIF 均显示；HEIC/AVIF 为 256×256 |
+| 14 | ⚠️ 部分 | `truncated.jpg` 显示错误卡片，但详情仍为英文 `Format error decoding Jpeg: I/O errors Not enough bytes, expected 64 but found 6`；`notes.txt` 显示「不支持的格式」提示条；均不崩溃 |
+| 15 | ⚠️ 超预算 | 500 张 320×240 图：扫描后 RSS `208740 KB`，末张 `214576 KB`，距 <200 MB 目标高约 4–7%；含 llvmpipe/D3D12 转译开销 |
+| 16 | ⚠️ 部分 | 窗口出现时间 121–249 ms（3 次），仅代表窗口创建；12 MP 翻页、4K 解码、帧率未测 |
+| 17 | ✅ | `BiuViewer-v0.2.0-linux-x86_64.tar.gz` 15 MB，`install.sh` 安装成功，`.desktop` MimeType 已含 heic/heif/avif |
+
+- **结论**：10 项通过、4 项部分通过、2 项未通过/不可用、1 项未执行。Linux 的格式、EXIF、GIF、缩放/平移、缩略图、CLI 与包完整性路径基本可用；**全屏在 Xvfb 下未通过**，第 1、2 项仍需真实桌面，内存略超目标。以上不能替代 `docs/acceptance.md` 结果表中的 Linux 实机结论。
+
 ## 未覆盖项与原因
 
 - **对话框与拖拽（macOS / Linux）**：需要人工交互，脚本无法可靠模拟（原生 NSOpenPanel 与系统拖拽）。Windows 已由自动化覆盖：WinForms 窗体配合原生 `ole32!DoDragDrop`（自定义 `IDropSource`）拖入文件/目录；UI Automation 在「打开文件夹」对话框的路径框（AutomationId `1152`）填入路径并点击「选择文件夹」。
