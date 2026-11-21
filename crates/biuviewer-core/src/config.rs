@@ -2,12 +2,18 @@
 //!
 //! 不使用 serde，配置是 `key=value` 文本，读取时忽略未知键与坏行。
 //! 这样升级版本时新增字段不会让旧配置失效。
+//!
+//! v2 起 `window_width`/`window_height` 记录内容区域尺寸（不含标题栏）。
+//! v1 记录的是含标题栏的 frame 高度，加载时需在窗口创建后按实际边框内缩修正。
 
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::viewport::ScaleMode;
+
+/// 当前配置格式版本。低于 2 的配置把窗口尺寸当作 frame 理解。
+pub const CONFIG_VERSION: u32 = 2;
 
 const DEFAULT_WIDTH: f32 = 960.0;
 const DEFAULT_HEIGHT: f32 = 640.0;
@@ -65,6 +71,9 @@ pub struct AppConfig {
     pub window: WindowConfig,
     pub scale_mode: ScaleMode,
     pub show_thumbnails: bool,
+    /// 旧版配置（无 `config_version`）把窗口尺寸存成含标题栏的 frame。
+    /// 为 true 时，窗口创建后需按实际内缩把内容区域缩回保存的 frame 尺寸。
+    pub window_size_is_frame: bool,
 }
 
 impl Default for AppConfig {
@@ -73,6 +82,7 @@ impl Default for AppConfig {
             window: WindowConfig::default(),
             scale_mode: ScaleMode::Fit,
             show_thumbnails: true,
+            window_size_is_frame: false,
         }
     }
 }
@@ -117,6 +127,8 @@ impl AppConfig {
 
     fn parse(text: &str) -> Self {
         let mut config = Self::default();
+        let mut version: Option<u32> = None;
+        let mut saw_window_size = false;
         for line in text.lines() {
             let line = line.trim();
             if line.is_empty() || line.starts_with('#') {
@@ -140,13 +152,16 @@ impl AppConfig {
                 "window_width" => {
                     if let Ok(width) = value.parse::<f32>() {
                         config.window.width = width;
+                        saw_window_size = true;
                     }
                 }
                 "window_height" => {
                     if let Ok(height) = value.parse::<f32>() {
                         config.window.height = height;
+                        saw_window_size = true;
                     }
                 }
+                "config_version" => version = value.parse::<u32>().ok(),
                 "scale_mode" => {
                     config.scale_mode = match value {
                         "actual" => ScaleMode::Actual,
@@ -161,6 +176,7 @@ impl AppConfig {
             }
         }
         config.window = config.window.sanitized();
+        config.window_size_is_frame = saw_window_size && version.unwrap_or(1) < CONFIG_VERSION;
         config
     }
 
@@ -172,6 +188,7 @@ impl AppConfig {
         };
         format!(
             "# BiuViewer 配置\n\
+             config_version={CONFIG_VERSION}\n\
              window_x={:.0}\n\
              window_y={:.0}\n\
              window_width={:.0}\n\
@@ -255,7 +272,34 @@ mod tests {
             },
             scale_mode: ScaleMode::Custom,
             show_thumbnails: false,
+            window_size_is_frame: false,
         };
-        assert_eq!(AppConfig::parse(&config.serialize()), config);
+        let text = config.serialize();
+        assert!(text.contains("config_version=2"));
+        assert_eq!(AppConfig::parse(&text), config);
+    }
+
+    #[test]
+    fn legacy_config_marks_window_size_as_frame() {
+        let config = AppConfig::parse(
+            "window_x=80\nwindow_y=60\nwindow_width=960\nwindow_height=672\nscale_mode=fit\n",
+        );
+        assert!(config.window_size_is_frame);
+        assert_eq!(config.window.height, 672.0);
+    }
+
+    #[test]
+    fn versioned_config_keeps_content_size() {
+        let config = AppConfig::parse(
+            "config_version=2\nwindow_width=960\nwindow_height=640\nscale_mode=fit\n",
+        );
+        assert!(!config.window_size_is_frame);
+        assert_eq!(config.window.height, 640.0);
+    }
+
+    #[test]
+    fn empty_or_default_config_needs_no_migration() {
+        assert!(!AppConfig::parse("# 注释\n").window_size_is_frame);
+        assert!(!AppConfig::default().window_size_is_frame);
     }
 }

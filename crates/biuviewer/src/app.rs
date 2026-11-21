@@ -41,13 +41,36 @@ pub fn run(initial: Option<PathBuf>) {
 
         let dialog = Arc::new(NativeFileDialog::new());
         let open_paths = pending.clone();
-        if let Err(err) = open_window(main_window_options(&config), cx, move |_window, cx| {
+        if let Err(err) = open_window(main_window_options(&config), cx, move |window, cx| {
+            restore_legacy_window_size(window, &config);
             cx.new(|cx| ViewerApp::new(dialog, initial, open_paths, config, cx))
         }) {
             tracing::error!("打开窗口失败: {err}");
             cx.quit();
         }
     });
+}
+
+/// v1 配置把窗口尺寸存成含标题栏的 frame，而 `WindowBounds::Windowed` 按内容区域创建。
+/// 升级后首次启动时按实际内缩把内容区域缩回原 frame 尺寸，之后保存的就是内容尺寸。
+fn restore_legacy_window_size(window: &mut gpui_kit::Window, config: &AppConfig) {
+    if !config.window_size_is_frame {
+        return;
+    }
+    let frame = window.window_bounds().get_bounds().size;
+    let content = window.viewport_size();
+    let inset_width = f32::from(frame.width) - f32::from(content.width);
+    let inset_height = f32::from(frame.height) - f32::from(content.height);
+    let width = (config.window.width - inset_width).max(640.0);
+    let height = (config.window.height - inset_height).max(480.0);
+    window.resize(size(px(width), px(height)));
+    tracing::info!(
+        "迁移 v1 窗口尺寸: frame {:.0}x{:.0} / 内缩 {:.0}x{:.0} -> 内容 {width:.0}x{height:.0}",
+        f32::from(frame.width),
+        f32::from(frame.height),
+        inset_width,
+        inset_height
+    );
 }
 
 fn main_window_options(config: &AppConfig) -> WindowOptions {

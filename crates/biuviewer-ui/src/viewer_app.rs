@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use biuviewer_core::{
     AppConfig, CancellationToken, Extent, FileDialogService, ImageList, MemoryCache, Offset,
@@ -106,6 +106,11 @@ pub struct ViewerApp {
     scale_factor: f32,
     open_paths: Arc<Mutex<Vec<PathBuf>>>,
     open_paths_task: Option<Task<()>>,
+    /// `BIUVIEWER_PERF_LOG` 设置时，按帧打印耗时，用于实机测量翻页延迟。
+    perf_log: bool,
+    perf_epoch: Instant,
+    perf_input: Option<(&'static str, Instant)>,
+    perf_frames: u64,
 }
 
 impl ViewerApp {
@@ -165,6 +170,10 @@ impl ViewerApp {
             scale_factor: 1.0,
             open_paths,
             open_paths_task: None,
+            perf_log: std::env::var_os("BIUVIEWER_PERF_LOG").is_some(),
+            perf_epoch: Instant::now(),
+            perf_input: None,
+            perf_frames: 0,
         };
         app.watch_open_urls(cx);
         if let Some(path) = initial {
@@ -288,6 +297,13 @@ impl ViewerApp {
     fn next_request(&mut self) -> u64 {
         self.request_seq += 1;
         self.request_seq
+    }
+
+    /// 记录一次输入起点，供 `BIUVIEWER_PERF_LOG` 输出「按键到首帧」耗时。
+    fn perf_mark(&mut self, label: &'static str) {
+        if self.perf_log {
+            self.perf_input = Some((label, Instant::now()));
+        }
     }
 
     fn cancel_load(&mut self) {
@@ -431,6 +447,15 @@ impl ViewerApp {
         self.view = self.preferred_view();
         self.start_animation(cx);
         self.start_prefetch(cx);
+        if let Some((label, start)) = self.perf_input {
+            if self.perf_log {
+                tracing::info!(
+                    target: "biuviewer::perf",
+                    "image-ready {label} {:.1}ms",
+                    start.elapsed().as_secs_f64() * 1000.0
+                );
+            }
+        }
         cx.notify();
     }
 
@@ -913,10 +938,22 @@ impl ViewerApp {
         }
 
         match key.as_str() {
-            "left" | "arrowleft" => self.prev_image(cx),
-            "right" | "arrowright" => self.next_image(cx),
-            "home" => self.first_image(cx),
-            "end" => self.last_image(cx),
+            "left" | "arrowleft" => {
+                self.perf_mark("page-turn");
+                self.prev_image(cx)
+            }
+            "right" | "arrowright" => {
+                self.perf_mark("page-turn");
+                self.next_image(cx)
+            }
+            "home" => {
+                self.perf_mark("page-turn");
+                self.first_image(cx)
+            }
+            "end" => {
+                self.perf_mark("page-turn");
+                self.last_image(cx)
+            }
             "+" | "=" => self.zoom_in(cx),
             "-" => self.zoom_out(cx),
             "0" => self.fit_to_window(cx),
@@ -1443,10 +1480,33 @@ impl Render for ViewerApp {
             self.close_hook_installed = true;
             let weak = cx.weak_entity();
             window.on_window_should_close(cx, move |window, cx| {
-                let bounds = window.window_bounds().get_bounds();
+                // `window_bounds()` 给出的是含标题栏的 frame，而窗口创建时
+                // `WindowBounds::Windowed` 按内容区域解释；直接回写会让窗口
+                // 每次重启多出一个标题栏高度。位置沿用 frame 原点，尺寸取内容区域。
+                let frame = window.window_bounds().get_bounds();
+                let bounds = Bounds {
+                    origin: frame.origin,
+                    size: window.viewport_size(),
+                };
                 let _ = weak.update(cx, |this, _cx| this.remember_window_bounds(bounds));
                 true
             });
+        }
+        if self.perf_log {
+            self.perf_frames += 1;
+            tracing::info!(
+                target: "biuviewer::perf",
+                "frame {} {:.1}ms",
+                self.perf_frames,
+                self.perf_epoch.elapsed().as_secs_f64() * 1000.0
+            );
+            if let Some((label, start)) = self.perf_input.take() {
+                tracing::info!(
+                    target: "biuviewer::perf",
+                    "input-to-frame {label} {:.1}ms",
+                    start.elapsed().as_secs_f64() * 1000.0
+                );
+            }
         }
         self.render_root(window, cx)
     }
